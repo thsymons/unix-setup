@@ -1,0 +1,17 @@
+#!/bin/csh
+# Copy dpu from hg to git
+# create_dpu dpu-src git-tgt
+#
+set src = $1
+set tgt = $2
+echo "Copy hg $src to git $tgt"
+cp -r $src $tgt
+git init $tgt
+rm -f results
+cd $tgt
+source setup.csh
+make allclean
+find . -name .hg -exec rm -fr {} \;
+
+
+

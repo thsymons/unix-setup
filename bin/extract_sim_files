@@ -1,0 +1,354 @@
+#!/usr/intel/bin/perl
+# Find and compile code referenced in compile.ctl files needed for a sim
+use Getopt::Std;
+use File::Basename;
+use File::Copy::Recursive;
+use Data::Dumper;
+
+sub usage {
+print <<EOF;
+Syntax: $0 -sXh compile-ctl-file [additional-ctl-files...]
+-u   : Filname is a unit name - finds associated compile.ctl file
+-t s : Test name
+-c d : Copy all files to given directory
+-s   : Display verilog/vhdl files only
+-x   : Expand control files
+-d   : Display commands executed
+-X   : Debug only mode, do not execute
+-h   : Display this help
+EOF
+exit;
+}
+
+$hdlctlfile = "$ENV{REL}/tools/fchip/hdlCompilers.ctl";
+
+usage unless getopts('Xhxsut:c:d');
+usage if $opt_h;
+usage if @ARGV == 0;
+$ctlfile = shift @ARGV;
+$unit = $ctlfile if $opt_u;
+$ctlfile = "units/$ctlfile/tb/compile.ctl" if $opt_u;
+
+die "Expected REL environment variable - none found\n" unless exists $ENV{REL};
+$rel = $ENV{REL};
+$ipdir = $ENV{IPDIR};
+
+%compile_paths = ();
+@vlogSources = ();
+@vlogIncdirs = ();
+@vlogToolargs = ();
+@vsimArgs = ();
+%dirhash = ();
+my $testbench;
+my $testcmd;
+my $testname = "";
+my $stdlibsdir = "stdlibs";
+
+process_ctl_file($ctlfile);
+
+foreach (@ARGV) {
+   process_ctl_file($_);
+}
+
+if ($opt_t) {
+   $testname = $opt_t;
+   $testpath = "units/$unit/tests/$testname";
+   $ctl = "$testpath/$testname.ctl";
+   process_ctl_file($ctl);
+   $testfile = find_file("$testpath/$testname.sv");
+   $testfile = find_file("$testpath/$testname.v") unless -e $testfile;
+   print "Including test file: $testfile\n";
+   $testcmd .= " $testfile";
+}
+
+if ($opt_c) {
+   run_cmd("rm -fr $opt_c");
+   run_cmd("mkdir -p $opt_c");
+   run_cmd("mkdir -p $opt_c/$stdlibsdir");
+}
+
+# Parse base compile ctl file and get library directories
+eval get_perl_code($hdlctlfile);
+print "$@\n" if ($@);
+@hdl_vlogArgs = @{$params{-test_vlogArgs}};
+$vlibstr = get_vlibs($hdl_vlogArgs[0]);
+
+$cmd = "#!/bin/csh\n";
+$cmd .= "setenv MODELSIM ./\n";
+
+$cmd .= "rm -fr work\n";
+
+$cmd .= "vlib work\n\n";
+
+$cmd .= "vlog -sv -novopt ";
+#$cmd .= "+incdir+" . join("+",@vlogIncdirs) if @vlogIncdirs;
+$cmd .= " +incdir";
+foreach (keys %vlogIncdirs) {
+   #print "Include dir: $_<<<\n";
+   $cmd .= "+$_";
+}
+$cmd .= " $vlibstr";
+foreach (@vlogArgs) {
+   $cmd .= " $_";
+}
+foreach (@vlogToolArgs) {
+   $vlibstr = get_vlibs($_);
+   $cmd .= " $vlibstr";
+}
+foreach (@vlogSources) {
+   $cmd .= " $_" unless exists $vlogSources{$_};
+   $vlogSources{$_} = 1;# preclude duplication
+}
+#$cmd .= " \n";
+$cmd .= " $testcmd | tee vlog.log\n\n";
+
+$cmd .= "vsim -c -l sim.log -novopt -do sim.do ";
+$cmd .= " " . join(" ",@vsimArgs);
+$cmd .= " $testbench $testname\n";
+
+print "testcmd: $testcmd\n";
+print "testbench: $testbench\n";
+print "test: $testname\n";
+
+if ($opt_c) {
+   foreach (keys %dirhash) {
+      $src = $_;
+      $dest = $dirhash{$src};
+      $dest =~ s/.*$rel\///;# remove repository reference
+#      run_cmd("mkdir -p $opt_c/$dest");
+#      run_cmd("cp -r $src/\* $opt_c/$dest");
+         copy_dir($src,"$opt_c/$dest");
+#         File::Copy::Recursive::dircopy($src,"$opt_c/$dest") || die $!;
+   }
+   write_script("$opt_c/run",$cmd);
+#   print `echo $cmd > $opt_c/run`;
+   `chmod -R 777 $opt_c/*`;
+   build_dofile("$opt_c/sim.do");
+   copy_modelsim_file();
+} else {
+   print "$cmd\n";
+   write_script("./run",$cmd);
+   system $cmd unless $opt_X;
+}
+
+sub copy_modelsim_file {
+   my $cmd = "find compile_results -name modelsim.ini";
+   open (CH,"$cmd|") || die "Cannot execute: $cmd\n";
+   print "Searching for modelsim.ini file...\n";
+   while (<CH>) {
+      chomp;
+      run_cmd("cp $_ $opt_c");
+   }
+}
+
+sub write_script {
+   my $script = shift;
+   my $cmd = shift;
+   open(FH,">$script") || die "Cannot create $script file\n";
+	my $maxwidth = 80;
+	my $line;
+	print "*** Now create sdcript...\n";
+# restrict command length to maxwidth characters
+	my @cmds = split(/\n/,$cmd);
+	foreach (@cmds) {
+		my @lines = split(/\s+/,$_);
+		$line = "";
+		foreach (@lines) {
+			s/\s+$//g;
+			next if $_ eq "";
+			if (length($line) >= $maxwidth) {
+				print "cmd=$line\n";
+				print FH "$line \\\n";
+				$line = "$_ ";
+			} else {
+				$line .= "$_ ";
+			}
+		}
+		$line =~ s/\s+$//;
+		$line =~ s/\\$//;
+		print "cmd=$line\n";
+		print FH "$line\n";
+	}
+   close FH;
+}
+
+sub build_dofile {
+   my $dofile = shift;
+   open(DF,">$dofile") || die "Cannot open $dofile file\n";
+   print DF <<EOF;
+radix hex
+proc wrapup {} {
+   echo [tb]
+   echo [see 10]
+   echo [simstats]
+   quit -f
+}
+onbreak { wrapup }
+onerror { wrapup }
+onElabError { wrapup }
+run -all
+wrapup
+EOF
+   close DF;
+}
+
+sub copy_dir {
+   my $src = shift;
+   my $dst = shift;
+   print "copy $src -> $dst\n";
+   my $find = "find $src -print -follow -type f|";
+   run_cmd("mkdir -p $dst");
+   open (FH,$find) || die "Cannot execute $find\n";
+   while (<FH>) {
+      chomp;
+#      print "Copying $_   >>> $dst\n";
+      next if -d $_;
+      run_cmd("cp $_ $dst");
+   }
+   close FH;
+}
+
+exit 0;
+sub process_ctl_file {
+   my $ctlfile = shift;
+   my (@compile_path, $path, $srcfile);
+   my ($library, %params);
+   my $perlfile = find_file($ctlfile);
+   my ($ctlbase,$ctlpath,$ctlsuffix) = fileparse($ctlfile,'\..*');
+   my ($ctlbase,$full_ctlpath,$ctlsuffix) = fileparse($perlfile,'\..*');
+   if ($perlfile ne "") {
+      print "Chasing $perlfile...\n" unless $opt_s;
+      if ($opt_x) {
+         print get_perl_code($perlfile);
+         print "\n";
+      }
+      
+      eval get_perl_code($perlfile);
+      print "$@\n" if ($@);
+#      print Data::Dumper->Dump([%params],["params"]);
+      # process dependencies first
+      @compile_path = @{$params{-compile_path}};
+      foreach $path (@compile_path) {
+         unless (exists $compile_paths{$path}) {
+            $compile_paths{$path} += 1;
+            process_ctl_file("$path/compile.ctl");
+         }
+      }
+#      print Data::Dumper->Dump([%params],["params_contd"]);
+      if (exists $params{-library_name}) {
+         $library = $params{-library_name};
+         $libs{$library} += 1;
+      }
+      $ctldir = $ctlpath;
+      add_dir($ctldir,$ctldir);
+      $ctldir = find_file($ctlpath) unless $opt_c;
+      $srctype = $params{-srctype}[0];# save testfile suffix
+      foreach (@{$params{-vlogSources}}) {
+         push(@vlogSources,"$ctldir$_");
+      }
+      foreach (@{$params{-vhdlSources}}) {
+         push(@vhdlSources,"$ctldir$_");
+      }
+      foreach (@{$params{-vlogIncDirs}}) {
+         s/\/+$//;# remove trailing /
+         $dir = find_file($_);
+         add_dir($dir,$_);
+         $dir = $_ if $opt_c;
+         print "Adding $dir to vlogIncdirs\n";
+         $vlogIncdirs{$dir} = 1;
+      }
+      foreach (@{$params{-vlogArgs}}) {
+         push(@vlogArgs,"$_");
+      }
+      foreach (@{$params{-vlogToolArgs}}) {
+         push(@vlogToolArgs,"$_");
+      }
+      $ctldir =~ s/\/+$//;# remove trailing /
+      $vlogIncdirs{$ctldir} = 1;
+      # Parse test-only parameters
+      foreach (@{$params{-test_vlogIncDirs}}) {
+         s/\/+$//;# remove trailing /
+         $dir = find_file($_);
+         add_dir($dir,$_);
+         $dir = $_ if $opt_c;
+         $vlogIncdirs{$dir} = 1;
+      }
+      foreach (@{$params{-vsimArgs}}) {
+         push(@vsimArgs,$_);
+      }
+      $testbench = $params{-testbench};
+
+   }
+   %params = {};
+}
+   
+sub add_dir {
+   my $srcdir = shift;
+   my $dstdir = shift;
+   $srcdir = find_file($srcdir);
+   $srcdir =~ s/\/+$//;
+   $dirhash{$srcdir} = $dstdir;
+}
+
+# Extract library files referenced with -v option
+# Copy extracted files to $stdlibsdir, and add to new command line
+sub get_vlibs {
+   my $cmd_in = shift;
+   my @vargs = split(/\s+/,$cmd_in);
+   my $get_next = 0;
+   my $cmd_out;
+   my $base,$path,$suffix,$basefile,$file;
+   foreach (@vargs) {
+      if (/^-v$/) {
+         $get_next = 1;
+      } elsif ($get_next == 1) {
+         chomp;
+         s/^$re\/l//;
+         #s/^\///;
+         ($base,$path,$suffix) = fileparse($_,'\..*');
+         $basefile = "$base$suffix";
+         $cmd_out .= " -v $stdlibsdir/$base$suffix";
+         $file = find_file($_);
+         #print "Searching for $file ($_)\n";
+         run_cmd("cp $file $opt_c/$stdlibsdir") if ($file ne "");
+         $get_next = 0;
+      } else {
+         $cmd_out .= " $_";
+      }
+   }
+   return $cmd_out;
+}
+
+sub run_cmd {
+   my $cmdline = shift;
+   print "$cmdline\n" if ($opt_d || $opt_X);
+   my @cmd = split('\s',$cmdline);
+   my $cmd = shift @cmd;
+   system $cmd, @cmd unless $opt_X;
+   $exit_value = $? >> 8;
+}
+
+# Find file by looking in working directory, then looking in archive
+sub find_file {
+   my $file = shift;
+#   print "Searching for $file...\n";
+   return $file if -e $file;
+   return "$rel/$file" if -e "$rel/$file";
+   print "WARNING: Cannot find $file\n";
+   return "";
+}
+
+sub get_perl_code {
+   my ($filename) = @_;
+
+   local (*FH);
+   my $perl_code = "";
+
+   open (FH,$filename) || die "Cannot open perl file: $filename\n";
+   while (<FH>) {
+      $perl_code .= $_;
+   }
+   close FH;
+   $perl_code;
+}
+

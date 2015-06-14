@@ -1,0 +1,608 @@
+#!/usr/bin/perl
+# Generate and execute script for given ACE test using VCS.
+# chases down files in local directory, repository or SEARCH_PATH defined in acerc file.
+# script must be run from PWA directory or any directory below it.
+# Must call script with -root option first (once only for each PWA), which defines current directory as PWA directory
+use Getopt::Long;
+use File::Basename;
+use Data::Dumper;
+Getopt::Long::config(qw(no_bundling auto_abbrev no_ignore_case));
+push @INC, "$ENV{ACE_HOME}/lib";
+#use Ace::OSData;
+
+sub usage {
+print <<EOF;
+Syntax: $0 -Xh [-model modelname] [testname]
+-model s    : Select model (other than defaul)
+-dsp s      : Add to search path (same as dsp option in ACE)
+-C          : Do not recompile - just re-execute sim
+-P          : Do NOT execute postsim process
+-wave       : Generate VPD wavefile
+-zap        : Delete contents of results directory before run
+-dbg        : Display debug info while executing
+-root       : Flag current directory as working directory
+-view       : View wavefile for current test
+-seed s     : Specify random seed
+-rand       : Generate random seed
+-show       : Show log in xterm
+-script     : Show run script for current test
+-gui        : Run with GUI
+-l          : View log file for current test
+-ls         : Display current test result directory
+-results    : Show results of all current tests in results directory
+-X          : Debug only mode, do not execute
+-h          : Display this help
+EOF
+exit;
+}
+
+usage unless &GetOptions(\%opts,
+      "dbg","X","gui","help","model=s","dsp=s","l","ls","P",
+      "rand","results","root","script","seed=s","show","view","wave","zap",
+      );
+usage if $opts{help};
+
+my $gosim_cfgfile = ".gosim";
+my $bugs = "../bugs";
+my $sessions = "../sessions";
+my $script_file;
+my $acerc_file = "ace/acerc";
+my $results_dir = "results";
+my $tests_dir = "$results_dir/tests";
+my $scope, $model, $default_test;
+my @search_paths;
+my @vlog_files;
+my @incdirs;
+my @udf_list;
+my $test_opts;
+my @test_dirs;
+my %hdl_files_processed;
+my $parser = "config/parser/ap_ipParser.cfg";
+
+# Find PWA directory
+my $pwa;
+if (exists $opts{root}) {
+   `touch $gosim_cfgfile`;
+   exit 0;
+}
+while (1) {
+   $pwa = `pwd`; chomp($pwa);
+   last if (-e $gosim_cfgfile);
+   die "Could not find $gosim_cfgfile file that defines root of current working directory\n" if $pwa eq "/";
+   chdir("../");
+}
+
+# Open and update gosim control file
+$perl = get_perl_code($gosim_cfgfile);
+eval $perl;
+if ($@) {
+   print "ERROR Parsing $gosim_cfgfile:\n";
+   die "$@\n";
+}
+
+if (exists $opts{dsp}) {
+   unless (exists $cfg->{dsp_list}) {
+      my @xxx = ();
+      $cfg->{dsp_list} = \@xxx;
+   }
+   my $dsp = $opts{dsp};
+   if ($dsp =~ /(\S+):(\S+)/) {
+      my $ip = $1, $release = $2;
+      $dsp = "$ENV{AP_IP_BASE}/$ip/release/$release";
+      $dsp = "$ENV{AP_IP_BASE}/$ip/release/ALL/$release" unless -e $dsp;
+   }
+   my $found = 0;
+   foreach (@{$cfg->{dsp_list}}) { # check for duplicate
+      $found = 1 if /^$dsp$/;
+   }
+   push @{$cfg->{dsp_list}}, $dsp if $found == 0; 
+}
+delete $cfg->{dsp_list} if $opts{clear} eq "dsp" || $opts{clear} eq "all";
+delete $cfg->{test} if $opts{clear} eq "test" || $opts{clear} eq "all";
+delete $cfg->{units} if $opts{clear} eq "model" || $opts{clear} eq "all";
+
+foreach (@{$cfg->{dsp_list}}) {
+   print "Adding $_ to search path ***************************\n";
+   unshift @search_paths,$_;
+}
+
+foreach (@search_paths) {
+   print "Search path: $_\n";
+}
+
+get_udf_files(\@udf_list);
+$testname = $default_test;
+if (@ARGV) {
+   $testname = shift @ARGV;
+   $cfg->{test} = $testname;
+   $cfg->{runmode} = '';
+   delete $cfg->{seed};
+   $test_given = 1;
+}
+if (@ARGV) {
+   $runmode = shift @ARGV;
+   $cfg->{runmode} = $runmode;
+   $runmode_given = 1;
+}
+
+if ($opts{tl}) {
+   $cfg->{test} = '';
+   $cfg->{runmode} = '';
+   delete $cfg->{seed};
+}
+
+if (exists $opts{model}) {
+   $cfg->{units} = $opts{model};
+}
+$model = $cfg->{units} if (exists $cfg->{units}) && ($cfg->{units} ne "");
+
+$opts{seed} = sprintf("%08x",int rand(0x7fffffff)) if exists $opts{rand};
+if (exists $opts{seed}) {
+   $random_seed = $opts{seed};
+   $cfg->{seed} = $random_seed;
+}
+
+update_ctlfile();
+
+`rm -fr $results_dir/*` if exists $opts{zap};
+print "Scope=$scope  Model=$model  Test=$testname\n";
+$testref = get_test_ref($testname);
+$testfile = get_test($testname);
+die "Cannot find test: $testname, aborting\n" unless -e $testfile;
+my ($base,$testdir,$suffix) = fileparse($testref,'\..*');
+my $testdir = "$tests_dir/$base";
+$testdir .= "__$cfg->{seed}" if exists $cfg->{seed} && $cfg->{seed} ne '';
+print "testdir=$testdir, base=$base, suf=$suffix ref=$testref, file=$testfile, test=$testname\n" if exists $opts{dbg};
+run_cmd("mkdir -p $testdir");
+$script_file = "$testdir/run";
+
+if (exists $opts{view}) {
+   fork and exit;# leave child running in background, terminate parent
+   setpgrp 0, 0;# isolate child from parent
+   $cmd = "dve -vpd $testdir/sim.vpd";
+   $session_file = "$pwa/$sessions/$model.tcl";
+   $cmd .= " -session $session_file" if -e $session_file; 
+   print "$cmd\n";
+   run_cmd($cmd);
+   exit 0;
+} elsif (exists $opts{l}) {
+   fork and exit;# leave child running in background, terminate parent
+   setpgrp 0, 0;# isolate child from parent
+   run_cmd("$ENV{EDITOR} $testdir/sim.log");
+   exit 0;
+} elsif (exists $opts{ls}) {
+   run_cmd("ls -l $testdir");
+   exit 0;
+} elsif (exists $opts{script}) {
+   run_cmd("cat $script_file");
+   exit 0;
+} elsif (exists $opts{results}) {
+   show_results();
+   exit 0;
+}
+
+build_script();
+`mkdir -p $sessions` unless -e $sessions;
+`ln -s $pwa/$sessions $testdir/sessions` unless -e "$testdir/sessions";
+chdir $testdir;# execute from test directory
+$cmd = "./run";
+$cmd .= " -C" if exists $opts{C};
+$cmd .= " -P" if exists $opts{P};
+run_cmd("$cmd") unless exists $opts{X};
+exit 0;
+
+# Create scrip and write out to $script_file
+sub build_script {
+   my %incdirs;
+   open FH,">$script_file" || die "Cannot open $script_file for writing\n";
+   print FH "#!/bin/csh -f\n";
+
+   print FH "\nrm -f simv sim.log sim.vpd\n";
+   print FH "\n";
+
+   #print FH "vcs -sverilog -ntb_opts dtm -ntb -R \\\n";
+   $cmd = "vcs +vpi -V -ntb_opts dtm+pcs+ext -sverilog +define+USE_VCS -cc gcc";
+   #$cmd .= " -PP" if exists $opts{wave};
+   $cmd .= " +define+USE_VCS_WAVES" if exists $opts{wave};
+   $cmd .= " -debug_pp";
+   print FH "$cmd \\\n";
+   print FH "+incdir";
+   foreach $inc (@incdirs) {
+      print FH "+$inc" unless exists $incdirs{$inc};
+      $incdirs{$inc} = 1;
+   }
+   print FH "\\\n";
+#   print FH "$test_opts \\\n";
+   foreach $file (@vlog_files) {
+      print FH "$file \\\n";
+   }
+   print FH "$testfile\n";
+
+   $cmd = "./simv +vmm_log_nofatal_at_1000 +nospecify +notimingcheck -l sim.log";
+   $cmd .= " +vpdfile+sim.vpd" if exists $opts{wave};
+   $cmd .= " +ntb_random_seed=$cfg->{seed}" if exists $cfg->{seed};
+   $cmd .= " -gui" if exists $opts{gui};
+   $cmd .= " >>/dev/null" unless exists $opts{show};
+
+   print FH "\n\nif (-e ./simv) then\n";
+   print FH "   echo\n";
+   print FH "   echo Executing $model $testname...\n";
+   print FH "   echo \"$cmd\"\n";
+   print FH "   $cmd\n";
+   print FH "   echo Log file:\n";
+   print FH "   echo           less $testdir/sim.log\n";
+   print FH "endif\n";
+
+   $postsim_cfg = find_source($parser);
+   $cmd = "ace_postsim.pl -mode 1";
+   $cmd .= " -b /proj/chgtools/eda/ace/2.5/udf/ace_test_info.pp";
+   $cmd .= " -l sim.log -p $postsim_cfg -r postsim.log";
+   print FH "\nif (\$1 != '-P' && \$2 != 'P') then\n";
+   print FH "$cmd\n";
+   print FH "endif\n";
+
+   close FH;
+   `chmod 775 $script_file`;
+
+   # process libraries
+   open(FH,">$testdir/synopsys_sim.setup") || die "Cannot create synopsys_sim.setup file\n";
+   print FH "WORK > DEFAULT\n";
+   foreach $lib (keys %libs) {
+      print FH "$lib : libs/$lib\n";
+   }
+   print FH "DEFAULT : libs/work\n";
+   close FH;
+
+   print "Wrote VCS script file to: $script_file\n";
+}
+
+sub show_results {
+   my $status,$elab_tiume,$sim_time,$mod_time,$host,$fsize,$logfile,$simdir;
+   my $rdir;
+   my %results;
+   print "\n";
+   unless ($opts{summary}) {
+      printf "%16s %48s  %10s %16s %s\n",
+         "--- unit ---","------------------- test -------------------","- status -","---- time ----","  duration  --Clocks--  Hertz";
+   }
+   if (opendir(DH,$tests_dir)) {
+      @dirlist = readdir(DH);
+      foreach (@dirlist) {
+			chomp;
+         next if /^\./;
+			my $file = "$tests_dir/$_/postsim.log";
+			my ($base,$simdir,$suffix) = fileparse($file,'\..*');
+         my $test = $_;
+			my $unit = "";
+         my $simtimefile = "$simdir/sim_timing_results.dat";
+			$logfile = "$simdir$test";
+			$logfile =~ s/_[^_]+$//;# remove _ul, _fc at end
+			$logfile .= ".mtilog";
+			$logfile .= ".gz" unless -e $logfile;
+			$mod_time = (stat ($file))[9];
+			$mod_time = format_date($mod_time);
+			$status = "NO RESULTS"; $host = ""; $elab_time = ""; $sim_time = ""; $postsim_time = "";
+			if (open(FH,$file)) {
+				while (<FH>) {
+					$status = $1 if /^\s+Status\s*:\s*(.+)/;
+					$host = $1 if /^\s+Host Machine\s+:\s*(\w+)/;
+					$elab_time = $1 if /^\s+Elab Time\s+:\s*(.+)/;
+					$sim_time = $1 if /^\s+Sim Time\s+:\s*(.+)/;
+					$postsim_time = $1 if /^\s+Postsim Time\s+\(s\)\s*:\s+(.+)/;
+				}
+				close FH;
+			} else {
+				$status = "NO RESULTS";
+				$status = "COMPIL ERR" if -e "${simdir}test_vlog.log.err";
+			}
+			$unit = get_unit($test);
+			$results{$unit}{$status}++;
+			$total_results{$status}++;
+			$test_count{$unit}++;
+
+			$fsize = (stat ($logfile))[7]/1000000;
+         unless ($opts{summary}) {
+            printf "%16s %48s: %10s %16s",$unit,$test,$status,$mod_time;
+            if (-e $simtimefile) {
+               $_ = `cat $simtimefile`;
+               ($stime,$sclocks,$shz) = /time:\s+(\S+)\s+Clocks:\s+(\S+)\s+Hz:\s+(\S+)/;
+               printf "  %9s %11d  %5d\n",$stime,$sclocks,$shz;
+            } else {
+               print "\n";
+            }
+         }
+		}
+	}
+	close CH;
+	print "\n";
+	printf "%40s ","Unit";
+	foreach $f (keys %total_results) {
+		printf "%12s ",$f;
+	}
+	print " Total\n";
+	printf "%40s ","------------------------";
+   foreach $f (keys %total_results) {
+		print " ------------";
+	}
+	print " -----\n";
+   foreach my $unit (keys %results) {
+      printf "%40s ",$unit;
+		foreach $f (keys %total_results) {
+			printf " %12d",$results{$unit}{$f};
+		}
+		printf " %5d\n",$test_count{$unit};
+   }
+	printf "%40s ","";
+   foreach $f (keys %total_results) {
+		print " ------------";
+	}
+	print " -----\n";
+	$total = 0;
+	printf "%40s ","Totals";
+   foreach $f (keys %total_results) {
+      printf " %12d",$total_results{$f};
+		$total += $total_results{$f};
+   }
+	printf " %5d\n",$total;
+   exit 0;
+}
+
+
+# get UDF files from Includes key of primary UDF file
+sub get_udf_files {
+   my ($udf_list) = @_;
+   my $udf;
+   get_primary_udf(\$scope,\$udf);
+   my $perl = get_perl_code($udf);
+   eval $perl;
+   if ($@) {
+      print "Error parsing $udf:\n";
+      die "$@\n";
+   }
+   foreach my $f (@{$audf{Includes}}) {
+      print "Include: $f\n" if $opts{dbg};
+      push @{$udf_list}, $f;
+      get_udf_defaults($f);
+      extract_sim_info($f);
+   }
+   extract_opts($save_hdl_spec);
+}
+
+# Extract sim info from *.hdl files
+sub extract_sim_info {
+   my $udf = shift;
+   print "Searching for udf: $udf\n" if $opts{dbg};
+   my $perl = get_perl_code($udf);
+   eval $perl;
+   if ($@) {
+      print "Error parsing $udf:\n";
+      die "$@\n";
+   }
+   if (exists $audf{HDLSpec}{$scope}{libs}) {
+      my $libs = $audf{HDLSpec}{$scope}{libs};
+      foreach $lib (keys %{$libs}) {
+         print "lib=$lib\n" if $opts{dbg};
+         process_lib($lib,$libs);
+      }
+      $save_hdl_spec = $udf;
+   }
+}
+
+# chase lib files in dependency order, extracting sim info from each
+sub process_lib {
+   my ($lib,$libs) = @_;
+   if (exists $libs->{$lib}{-dependent_libs}) {
+      foreach my $dlib (@{$libs->{$lib}{-dependent_libs}}) {
+         process_lib($dlib,$libs);
+      }
+   }
+   foreach my $hdl (@{$libs->{$lib}{-hdl_spec}}) {
+      get_hdl_spec($hdl) unless exists $hdl_files_processed{$hdl};
+      $hdl_files_processed{$hdl} = 1;
+   }
+}
+
+# extract test options
+sub extract_opts {
+   my $udf = shift;
+   print "Searching for udf: $udf\n" if $opts{dbg};
+   my $perl = get_perl_code($udf);
+   eval $perl;
+   if ($@) {
+      print "Error parsing $udf:\n";
+      die "$@\n";
+   }
+   if (exists $audf{HDLSpec}{$scope}{models}{$model}) {
+      my $model_opts = $audf{HDLSpec}{$scope}{models}{$model};
+#      foreach $opt (@{$model_opts->{testcase_globals}{-test_vlog_opts}}) {
+#         $test_opts .= "$opt ";
+#      }
+      foreach $opt (@{$model_opts->{testcase_globals}{-test_vlog_incdirs}}) {
+         push @incdirs,find_source($opt);
+      }
+   }
+}
+
+# find test source file
+sub get_test {
+   my $testname = shift;
+   $testname = get_test_ref($testname);
+   my $file = find_source($testname);
+   return $file;
+}
+
+# get test source reference, relative to working directory
+sub get_test_ref {
+   my $testname = shift;
+   my ($base,$path,$suffix) = fileparse($testname,'\..*');
+   my @suffix = (".sv",".v");
+   foreach $suffix (@suffix) {
+      my $test = "$base$suffix";
+      foreach $path (@test_dirs) {
+         my $rfile = "$path/$base/$test";
+         my $file = find_source($rfile);
+         return $rfile if -e $file;# return just local reference, not full path, but verify existence
+      }
+   }
+   return $testname;
+ }
+
+# extract VLOG files and include files from given *.hdl file
+sub get_hdl_spec {
+   my $hdl_file = shift;
+   print "Parsing HDL file: $hdl\n" if $opts{dbg};
+   my $perl = get_perl_code($hdl_file);
+   eval $perl;
+   if ($@) {
+      print "Error parsing $udf:\n";
+      die "$@\n";
+   }
+   foreach $f (@{$hdl_spec->{-vlog_files}}) {
+      print "VLOG Files: $f\n" if $opts{dbg};
+      push @vlog_files,find_source($f);
+   }
+   foreach $f (@{$hdl_spec->{-vlog_incdirs}}) {
+      print "Include dirs: $f\n" if $opts{dbg};
+      push @incdirs,find_source($f);
+   }
+}
+
+# get default model and test from given UDF file
+sub get_udf_defaults {
+   my $udf = shift;
+   print "Searching for udf: $udf\n" if $opts{dbg};
+   my $perl = get_perl_code($udf);
+   eval $perl;
+   if ($@) {
+      print "Error parsing $udf:\n";
+      die "$@\n";
+   }
+   if (exists $audf{InterfaceVars}{$scope}) {
+      $default_model = $audf{InterfaceVars}{$scope}{-model}{default} if exists $audf{InterfaceVars}{$scope}{-model}{default};
+      $default_test = $audf{InterfaceVars}{$scope}{-test}{default} if exists $audf{InterfaceVars}{$scope}{-test}{default};
+      $model = $default_model;
+      $model = $opts{model} if exists $opts{model};
+      #print "Scope = $scope, Model = $model, test = $default_test\n";
+   }
+}
+
+# get primary UDF file defined in acerc file
+sub get_primary_udf {
+   my ($scope, $udf) = @_;
+   get_acerc();
+   $_ = $acerc{UDF}[0];
+   ($$scope,$$udf) = /(.*):(.*)/;
+   print "Primary UDF: $$scope - $$udf\n";
+   foreach $p (@{$acerc{SEARCH_PATHS}{$$scope}}) {
+      push @search_paths,$p;
+   }
+   foreach $p (@{$acerc{TEST_PATTERNS}}) {
+      push @test_dirs,$p;
+   }
+}
+
+sub get_acerc {
+   my $filename = find_source($acerc_file);
+   my $perl = get_perl_code($filename);
+   eval $perl;
+   if ($@) {
+      print "Error parsing $filename:\n";
+      die "$@\n";
+   }
+   #print Data::Dumper->Dump($acerc);
+}
+
+# Write out control file
+sub update_ctlfile {
+   run_cmd("cp $gosim_cfgfile ${gosim_cfgfile}.bak");
+   open FH,">$gosim_cfgfile" || die "Cannot open $gosim_cfgfile\n";
+   print FH Data::Dumper->Dump([$cfg],["cfg"]);
+   close FH;
+}
+
+# Looks for file in local PWA, else looks for it in SEARCH_PATH defined in acerc file
+# Returns full path.
+sub find_source {
+   my $filename = shift;
+   my $rfile;
+   print "find_source: looking for $filename...\n" if $opts{dbg};
+   $rfile = "$pwa/$filename";
+   return $rfile if -e $rfile;
+   foreach my $path (@search_paths) {
+      $rfile = "$path/$filename";
+      print "find_source2: looking for $filename in $path...\n" if $opts{dbg};
+      return $rfile if -e $rfile;
+   }
+   #die "Cannot file file: $filename (or $rfile)\n";
+   return $filename;
+}
+
+# read given file, return as concatenated string that can be executed
+sub get_perl_code {
+   my ($filename) = @_;
+   my $fn = find_source($filename);
+
+   local (*FH);
+   my $perl_code = "";
+
+   open (FH,$fn) || die "Cannot open perl file: $fn\n";
+   while (<FH>) {
+      $perl_code .= $_;
+   }
+   close FH;
+   $perl_code;
+}
+
+# given time in seconds, return as HH:MM:SS
+sub format_time {
+   my $seconds = $_[0];
+   my ($hour,$min,$sec,$time);
+   $hour = int($seconds / 3600);
+   $min = int(($seconds % 3600) / 60);
+   $sec = $seconds % 60;
+   $time = sprintf("%02d:%02d:%02d",$hour,$min,$sec);
+}
+
+# given epoch time, returns formatted date/time string
+sub format_date {
+   my $date = $_[0];
+   my $result;
+   my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime($date);
+   $result = sprintf "%3s %2d %02d:%02d:%02d",$month[$mon],$mday,$hour,$min,$sec;
+}
+
+sub post_runtime {
+   my $msg = shift;
+   my $start = shift;
+
+   my $time = localtime();
+   my $runtime = format_time(time() - $start);
+   my $line = "$msg $runtime @ $time\n";
+   push @summary,$line;
+}
+
+sub display_runtime {
+   my $msg = shift;
+   my $start = shift;
+
+   post_runtime($msg,$start);
+   print $summary[-1];
+}
+
+# find unit name at start of given string (unit_test)
+sub get_unit {
+	my $test = shift;
+	my @comps = split(/__/,$test);
+	my $unit = $comps[0];
+   return $unit;
+}
+
+sub run_cmd {
+   my $cmdline = shift;
+   print "$cmdline\n" if $opts{X};
+   my @cmd = split('\s',$cmdline);
+   my $cmd = shift @cmd;
+   system $cmd, @cmd unless $opts{X};
+   $exit_value = $? >> 8;
+}
+

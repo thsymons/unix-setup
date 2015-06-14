@@ -1,0 +1,1699 @@
+#!/usr/bin/perl
+
+# Section: gosim
+# Convenience wrapper script for ACE simulation script
+# ||
+# Syntax: gosim [options] [-unit unit-name] [-b block-name] [testname] [runmode] [options]
+# ||
+# Use -h option to see brief description of all options.
+# ||
+# Basic Features:
+# - Executes given sim in local mode by default.  Use -nb for NetBatch or -gui for Modelsim GUI.
+# - Compiles testbench, test and executes sim with one invocation by default (any step can be disabled).
+# - Executes all runmodes unless one given.
+# - Will prompt for testnames and/or runmodes with -p option.
+# - Suppresses verbose xterm display and parses error logs to display error code directly.
+# - Remembers last test run - 'gosim' alone will execute last test (but will not remember transcient options)
+# - Knows locations and names of various output files.  Use 'standalone' options to display logfile, wavefile
+#   tracker files, coverage files or test files from last sim run.
+# - Generates, merges and displays code coverage and function coverage data.
+# - Can execute each sim N times, using new random seed for each run (using standard CTL file).
+# - Can also execute sim with random seed given on command line (-rand option, standard CTL file).
+# - Display results of all sims in regressions directory with -results or -summary
+# - Can generate Modelsim and/or Verdi wave files (and does not delete them).
+# - Supports batch mode usage model for viewing wavefiles (for both Modelsim and Verdi wave files).
+# - When displaying wavefile, will automatically use dofile or rcfile matching unit name if found in AEW/dofiles.
+# - Adds menu to wave window to easily reload new wavefile, and save dofile/rcfile.
+# - User default options may be defined in ~/.gosim file (format: option [value])
+#
+# Notes:
+# - Uses PWA/regressions directory by default (instead of units/UNIT/regressions - can be overridden).
+# - Capitalized options disable default behavior.
+# - Requires Ausim configuration have been saved at least once via Ausim GUI.
+# - Remembers most options saved in Ausim configuration file (and saves new options there).
+# - Maintains separte copy of Ausim configuration in local directory.
+# - Must be run from working directory, or below it.
+# - Uses ADAM_BASELINE environment variable and local directory to find source code - does not pick
+# up IC from Ausim configuration file.
+# - Requires use of Alternate Engineering Workspace (AEW).
+# - If using gosim to generate random seed, CTL file must not also use -sv_seed option.
+#
+# Script: gosim
+#unshift @INC, "/usr/local/perl-5.8.0/lib/5.8.0/i686-linux/";
+use lib "$ENV{ACE_HOME}/lib";
+use Getopt::Long;
+use File::Basename;
+use Data::Dumper;
+Getopt::Long::config(qw(no_bundling auto_abbrev no_ignore_case));
+#push @INC, "$ENV{ACE_HOME}/lib";
+use Ace::OSData;
+
+my $gosim_cfgfile = ".gosim";
+my $bugs = "../bugs";
+my $dofiles = "../dofiles";
+my $rcfiles = "../rcfiles";
+my $max_waiting = 500;# limit for max number of jobs waiting in NetBatch
+my $submit_wait_time = 300;# time to wait between NetBatch availability checks
+my $lv_geom = "1000x800";
+my $lv_font = "12";
+my $lv_file = "";
+my $lv_run = "";
+my $cc_opts = "sbcef0";
+my $nb_pools = "ch_suse64,ch_linux";
+my $iq_min = 2;# min # of Netbatch servers that must be available for interactive processing
+my $acerc_file = "ace/acerc";
+my $scope, $model, $default_test;
+my $randomTestsDir = ".randomTests";
+my $merge_dir = ".";
+my $max_merge_count = 2000;
+my $testlist_dir = "config/testlists";
+
+sub usage {
+print <<EOF;
+
+Compiles and simulates one or more ACE jobs.
+Multiple jobs will run sequentially on local machine by default.  Use -nb for NetBatch.
+All runmodes are executed if no runmode is given.
+All tests within a testlist are executed.
+Can execute multiple copies of each/selected runmode, with different random seeds (see -loop option).
+
+Automatically supports alternate PWA - detects it and passes -pwa option to ACE.
+
+If unit-name or testname are not given, they are remembered from prior invocation in this workspace.
+
+Note: Capitalized arguments disable default behavior
+
+Syntax: gosim [options] [-tl testlist] [-b block] [-unit unit-name] [testname] [runmode]
+** Build options **
+-cc         : Clean compile - force makefile to rebuild all targets
+-C          : Do NOT compile RTL/Testbench before running simulation (compiles and simulates by default)
+-K          : Do NOT capture compile results to display errors to screen
+-B          : Do NOT build test prior to execution
+-S          : Do not simulate (compile only)
+-gls        : Enable GLS build
+-sdf delay  : Use SDF delay of min, typ or max
+-cover      : Enable code coverage (for RTL only, testbench automatically excluded)
+-dg         : Disable grafting
+-profile    : Enable performance profiling
+-interval n : Gives profiling interval in ms (default = 10)
+-calltree   : Enables calltree collection for performance profiling
+-memprof    : Enable memory profiling
+-zaptests   : Delete alltest  results directories before starting compile/sim
+-nozaptest  : Do NOT delete test result directory before starting test (for single test only)
+-zap        : Delete compile_results and regressions directories before starting compile/sim
+-dzap       : Same as zap, but files are moved out-of-sight and deleted at 2AM
+-dsp s      : Add build directory - will by appended to all ace build commands as -dsp option
+              Use full path to directory, or ip_name:release (e.g. ap_ip_box::Q20080114_1613_socip1_ap_ip_box
+              Persists until '-clear dsp' is subsequently called
+-tool_debug : Put ACE into debug mode
+-clear s    : Clear given component from gosim state file (separate multiple components with commas)
+              dsp - all remembered DSP build directories
+              model - reverts back to default model
+              test - reverts back to default test
+              seed - clear out random seed
+              all - all of the above
+
+** Test selction options **
+-model s    : Specify unit name (uses unit from prior invocation if not given)
+-b s        : Specify block name
+-tl s       : Execute all tests in given testlist
+-rl n       : Select single test (by number) within testlist (-tl option must be used)
+-dtl s      : Use dynamic test list
+-p          : Prompt for testnames and runmodes (if any) for selected test
+pl          : Prompt for testlist
+-x s        : Exclude given test(s) or runmode(s), separated by commas, no spaces
+
+** Run options **
+-coe        : Crash sim on error and produce stack dump (via IVM log utility)
+-sof        : Stop on failing sim (when multiple sims requested, invalid with Netbatch)
+-gui        : Run interactively with Modelsim GUI
+-nb         : Use NetBatch to execute sim (runs locally by default)
+-NB         : Do NOT use NetBatch for testlists (which do use NetBatch by default)
+-pool s     : Netbatch pool to use
+-slot n     : Netbatch slot to use
+-i          : Submit to NetBatch for interactive processing
+-I          : Do NOT submit to NetBatch for interactive processing (overrides -i option)
+-max N      : Run only N tests, then exit
+-simopt s   : Add any option to vsim command line
+-timeout n  : Set sim timeout (using +sim_timeout plusarg)
+-trace      : Enable task/function tracing in log
+-sva        : Enable assertions and functional coverage
+-nosva      : Disable assertions and functional coverge
+-set_debug_levels s :  Where s can be LLL=N, with LLL being a log name and N begin the desired debug level.
+                       Multiple logs can be referenced, with each LLL=N separated by a comma (no spaecs).
+-sdl s      : Shortcut for -set_debug_levels
+
+** Randomization options **
+-gm N       : Generate N random runmodes (must be supported by test control file)
+-seed s    : Use given random seed.  Requires no support in control file.
+-rand       : Same as '-seed gen'
+-loops N    : Run N instances of sim, using separate seed for each
+-aceloop N  : Run N instances of sim, using separate seed for each (using ace test:seed,test:seed feature)
+-initreg    : Randomly initialize all 4-state variables to 0 or 1 (instead of x)
+-regseed s  : Use given random seed for initreg option (seed generated randomly if not given)
+-solveflags s  : Select behavior options for solver:
+                     i = disable bit interleaving for >, >=, <, <= constraints
+                     n = disable bit interleaving for all constraints
+                     r = reverst bit interleaving
+                         Options can be combined
+ 
+** Output options **
+-wave       : Generate Modelsim format wave file
+-fsdb       : Generate fsdb format wave file
+-q          : Quiet - do not display log file to stdout
+-noq        : Ignore -q option
+-nocleanup  : Do not clean up files at end of sim
+
+** Standalone operations **
+-bug s      : Copy sim log and wave file to BUGS directory, using given base name
+-clean      : Delete all compilation and regression results
+-l          : Show log for last test run
+-lv         : Show log for last test run using logviewer
+-li         : Use *.imtilog instead of *.mtilog for -l or -lv option
+-axi        : Show default axi track file
+-axif s     : Show axi track file
+-e          : Use \$EDITOR instead of less to display files
+-et         : Edit current test and its control file
+-grepall    : Grep all regression logs for error, fatal, warning (ignoring case)
+-ls         : Show sim directory
+-t          : Tail current log file
+-verdi      : Launch Verdi for last wavefile created
+-view       : Launch Modelsim to view last wavefile created
+-unzip      : Unzip logfile
+-results    : Scan for all sims run in local workspace, display results
+-summary    : Same as results, but only show summary results
+-viewmerge  : View coverage of merged sims in GUI
+-viewcov    : View coverage (in GUI) of last sim run
+-merge      : Merge coverage results from regressions directory
+-zapp       : Delete all passing regressions
+-postsim    : Show postsim log file
+
+** Configuration options - typically defined in ~/.gosim file **
+-bugdir s   : Define BUGS directory, defaults to $bugs
+-dofiles s  : Define DOFILES directory, defaults to $dofiles
+-rcfiles s  : Define RCFILES directory, defaults to $rcfiles
+-pre_do s   : Dofile to execute before sim runs (locate in DOFILES directory, or give full path)
+-post_do s  : Dofile to execute after sim runs (locate in DOFILES directory, or give full path)
+-maxwait n  : Define max number of jobs allowed to wait in NetBatch (stalls further submissions, default=$max_waiting)
+-wait_time n: Number of seconds to wait between NetBatch availability checks, default=$submit_wait_time
+-lv_geom HxV: Geometry for logviewer, defaults to $lv_geom
+-lv_font n  : Font size for logviewer, defaults to $lv_font
+-lv_file s  : logviewer script file to load on startup
+-lv_run     : logviewer script to run on startup (located in script file)
+-pools s    : Comma separated list of Netbatch pools 
+-ipool s    : Netbatch pool for interactive jobs
+-islot s    : Netbatch slot for interactive jobs
+-cc_opts s  : Options for code coverage - select from sbceftxi (for stmt,branch,cond,exp,fsm,toggle and extended togle)
+              and optimization level i, where i is a digit from 0 to 4 (defaults to $cc_opts)
+-xcheck     : Enable AXI control and data signal X and Z checks
+-iq_min     : Mininum number of Netbatch servers that must be available for interactive processing
+
+** Miscellaneous options **
+-ace s      : Pass any arguments to ace script
+-root       : Define current directory as root of working directory
+-X          : Debug only mode, do not execute
+-dbg        : Display commands before execution
+-help       : Display this help
+-acehelp    : Show ACE help
+
+Executable: $0
+EOF
+exit;
+}
+
+# capture original command line
+my $cmdline;
+foreach (@ARGV) { # see if script should be submitted to NetBatch
+   $cmdline .= " $_";
+}
+
+usage unless &GetOptions(\%opts,
+      "ace=s","acehelp","aceloop=n","axi","axif=s","b=s","bug=s","bugdir=s","B",
+      "cc","clear=s","C","clean","cover","coe","cc_opts=s","calltree",
+      "dbg","dg","dofiles=s","dsp=s","dtl=s","e","et",
+      "fsdb","gm=n","gls","gui","grepall",
+      "help","i","I","ipool=s","islot=s","iq_min=n","initreg","interval=n",
+      "l","lv","li","ls","loops=n",
+      "K","max=n","memprof","merge","model=s","maxwait=n","wait_time=n",
+      "nb","NB","nosva","noq","nozaptest","nocleanup",
+      "p","P","pl","pool=s","pools=s","pre_do=s","post_do=s","postsim","profile",
+      "q",
+      "rand","rseed=s","results","rcfiles=s","regseed=s","root","rl=n",
+      "S","seed=s","simopt=s","slot=n","sof","summary","sva","solveflags=s","set_debug_levels=s","sdl=s",
+      "t","timeout=n","tl=s","trace","tool_debug",
+      "unzip","verdi","view","viewcov","viewmerge","wave",
+      "x=s","X","xcheck","dzap","zap","zaptests","zapp",
+      );
+usage if $opts{help};
+
+process_cfgfile();
+
+$user = $ENV{USER};
+$editor = $ENV{EDITOR};
+$repository = "$ENV{REL}";
+# Assign options to control variables
+get_opt(\$bugs,bugdir);
+get_opt(\$max_waiting,maxwait);
+get_opt(\$submit_wait_time,wait_time);
+get_opt(\$lv_geom,lv_geom);
+get_opt(\$lv_font,lv_font);
+get_opt(\$lv_file,lv_file);
+get_opt(\$lv_run,lv_run);
+get_opt(\$dofiles,dofiles);
+get_opt(\$rcfiles,rcfiles);
+get_opt(\$cc_opts,cc_opts);
+get_opt(\$nb_pools,pools);
+get_opt(\$iq_min,iq_min);
+get_opt(\$zap,zap);
+
+delete $opts{q} if exists $opts{noq};
+
+@month = qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
+
+@netbatch_pools = split(/,/,$nb_pools);
+$nb_pool = get_pool();
+$nb_pool = $opts{pool} if $opts{pool};
+$exe_mode = "local";
+if ($opts{nb}) {
+   $exe_mode = "batch";
+   $exe_mode .= " -pool $nb_pool" if $nb_pool ne "";
+   $exe_mode .= " -qslot $opts{slot}" if $opts{slot};
+}
+$testtype = "direct";
+$less = "less";
+$less = $editor if $opts{e};
+$logview = $less;
+if ($opts{lv}) {
+   $logview = "logview -t $lv_font -g $lv_geom";
+	if (-e $opts{lv_file}) {
+		$logview .= " -s $lv_file";
+		$logview .= " -x $lv_run" if exists $opts{lv_run};
+	}
+   $logview .= " -f";
+}
+$opts{results} = 1 if $opts{summary};
+$opts{seed} = $opts{rseed} if exists $opts{rseed};
+$opts{seed} = "gen" if exists $opts{rand};
+$opts{set_debug_levels} = $opts{sdl} if exists $opts{sdl};
+
+# Find PWA directory
+my $cwd;
+if (exists $opts{root}) {
+   `touch $gosim_cfgfile`;
+   exit 0;
+}
+while (1) {
+   $cwd = `lpwd`; chomp($cwd);
+   last if (-e $gosim_cfgfile);
+   die "Could not find $gosim_cfgfile file that defines root of current working directory\n" if $cwd eq "/";
+   chdir("../");
+}
+@pwa = split(/\//,$cwd);
+$current_pwa = pop(@pwa);
+# Check if alternate PWA is needed
+chdir $ENV{PWA};
+$base_pwa = `lpwd`; chomp($base_pwa);
+chdir $cwd;
+my $pwa_option = "";
+if ($base_pwa ne $cwd) {
+   print "Setting local ACE PWA to $current_pwa\n";
+   #$pwa_option = "-pwa $current_pwa";
+   $ENV{ACE_PWA_DIR} = $current_pwa;
+}
+$time = localtime();
+print "Executing from $cwd, pwa = $current_pwa @ $time\n";
+
+if (exists $opts{acehelp}) {
+   run_cmd("ace -h -hl 2");
+   exit 0;
+}
+
+$dofiles = "$cwd/$dofiles" unless ($dofiles =~ /^\//);
+$dofiles = clean_path($dofiles);
+# Open and update gosim control file
+$perl = get_perl_code($gosim_cfgfile);
+eval $perl;
+if ($@) {
+   print "ERROR Parsing $gosim_cfgfile:\n";
+   die "$@\n";
+}
+
+my @udf_list;
+get_udf_files(\@udf_list);
+
+my %results = ();
+my $unitname = $model;
+my ($base,$path,$suffix) = fileparse($default_test,'\..*');
+my $testname = $base;
+my $runmode = "";
+my $test_given = 0;
+my $runmode_given = 0;
+my $simname;
+if (@ARGV) {
+   $testname = shift @ARGV;
+   $cfg->{test} = $testname;
+   $cfg->{runmode} = '';
+   if ($testname =~ /(.*)__(.*)/) {
+      $testname = $1;
+      $runmode = $2;
+      $cfg->{test} = $testname;
+      $cfg->{runmode} = $runmode;
+   }
+   $cfg->{seed} = '';
+   $test_given = 1;
+}
+if (@ARGV) {
+   $runmode = shift @ARGV;
+   $cfg->{runmode} = $runmode;
+   $runmode_given = 1;
+}
+
+$unitname = $cfg->{units} if (exists $cfg->{units}) && ($cfg->{units} ne "");
+$block = $cfg->{block};
+if (exists $opts{model}) {
+   $cfg->{units} = $opts{model};
+   $unitname = $cfg->{units};
+   $cfg->{block} = '';
+   $block = "";
+}
+if (exists $opts{b}) {
+   $cfg->{block} = $opts{b};
+   $block = $cfg->{block};
+}
+$block_insert = "";
+$block_insert .= "/$block" if $block ne "";
+if ((exists $opts{p}) && !(exists $opts{P})) { # prompt for runmodes
+   my %modes = ();
+   my $select;
+   unless ($test_given == 1) {
+      do {
+         print "Available tests:\n";
+         my $i = 1;
+         $testlist = get_tests();
+         die "No tests for for $unitname$block_insert\n" if $testlist eq "";
+         foreach (@$testlist) {
+            s/.*\///;# select final directory level only
+            printf "   %3d %s\n",$i,$_;
+            $modes{$i++} = $_;
+         }
+         print "Select test: ";
+         $select = <STDIN>;
+         chomp($select);
+      } until (exists $modes{$select});
+      $testname = $modes{$select};
+      $cfg->{test} = $testname;
+      $cfg->{runmode} = '';
+      $cfg->{seed} = '';
+   }
+   %modes = ();
+   my $runmodes = get_runmodes($testname);
+   if ($runmodes ne "") {
+      do {
+         print "Available runmodes:\n";
+         my $i = 1;
+         foreach $runmode (keys %{$runmodes}) {
+            printf "   %3d %s\n",$i,$runmode;
+            $modes{$i++} = $runmode;
+         }
+         print "Select runmode: ";
+         $select = <STDIN>;
+         chomp($select);
+      } until (exists $modes{$select});
+      $runmode = $modes{$select};
+      $cfg->{runmode} = $runmode;
+   }
+} elsif (exists $opts{pl}) { # select testlist
+   $opts{tl} = select_testlist();
+}
+
+if ($opts{tl}) {
+   $cfg->{test} = '';
+   $cfg->{runmode} = '';
+   $cfg->{seed} = '';
+}
+if ($cfg->{test} =~ /(\S+):(\S+)/) {
+   $cfg->{test} = $1;
+   $cfg->{runmode} = $2;
+   $cfg->{seed} = '';
+}
+$test = find_source("units/$unitname/tests$block_insert/$cfg->{test}");
+unless (-e $test) {
+   my $cktst = find_source("${unitname}_$cfg->{test}");# prepend unit name to test 
+   $cfg->{test} = $cktst if -e $cktst;
+}
+$testname = $cfg->{test} if exists $cfg->{test};
+$runmode = $cfg->{runmode};
+$random_seed = $cfg->{seed};
+if (exists $opts{seed}) {
+   $random_seed = $opts{seed};
+   $random_seed = sprintf("%08x",int rand(0x7fffffff)) if $opts{seed} eq "gen"; 
+   $cfg->{seed} = $random_seed;
+}
+@excludes = split(/,/,$opts{x}) if exists $opts{x};
+foreach (@excludes) {
+   $excludes{$_} = 1;
+}
+
+$cfg->{config} = $ENV{ADAM_BASELINE};
+$cfg->{graft} = 'yes';
+$cfg->{xdrive_en} = '';
+$cfg->{workSpacePath} = "aew/$current_pwa";
+$cfg->{workSpacePath_en} = '1';
+$cfg->{tools} = '';
+$cfg->{tools} = 'verdi' if $opts{fsdb};
+$cfg->{append_vsim} = '';
+
+if (exists $opts{dsp}) {
+   unless (exists $cfg->{dsp_list}) {
+      my @xxx = ();
+      $cfg->{dsp_list} = \@xxx;
+   }
+   my $dsp = $opts{dsp};
+   if ($dsp =~ /(\S+):(\S+)/) {
+      my $ip = $1, $release = $2;
+      $dsp = "$ENV{AP_IP_BASE}/$ip/release/$release";
+      $dsp = "$ENV{AP_IP_BASE}/$ip/release/ALL/$release" unless -e $dsp;
+   }
+   my $found = 0;
+   foreach (@{$cfg->{dsp_list}}) { # check for duplicate
+      $found = 1 if /^$dsp$/;
+   }
+   push @{$cfg->{dsp_list}}, $dsp if $found == 0; 
+}
+delete $cfg->{dsp_list} if $opts{clear} eq "dsp" || $opts{clear} eq "all";
+delete $cfg->{test} if $opts{clear} eq "test" || $opts{clear} eq "all";
+delete $cfg->{units} if $opts{clear} eq "model" || $opts{clear} eq "all";
+delete $cfg->{seed} if $opts{clear} eq "seed" || $opts{clear} eq "all";
+
+my $append_vsim = "";
+my $append_vlog = "";
+my $test_vlogargs = "";
+#$append_vsim .= " -coverage" if $opts{cover};
+$append_vsim .= " -memprof"if $opts{memprof};
+$append_vsim .= " -tool_debug" if $opts{tool_debug};
+#$append_vsim .= " +sim_timeout=$opts{timeout}" if $opts{timeout};
+$append_vsim .= " $opts{simopt}" if $opts{simopt};
+$append_vsim .= " -GENABLE_AXI_CNTL_XCHECKS=1 -GENABLE_AXI_DATA_XCHECKS=0" if exists $opts{xcheck};
+$append_vsim .= " -solveflags=$opts{solveflags}" if exists $opts{solveflags};
+#if (exists $opts{gui}) {
+#   $append_vsim .= " -onfinish stop";
+#} else {
+#   $append_vsim .= " -onfinish stop";
+#}
+if ($opts{initreg}) {
+   $initreg_seed = int rand(0x7fffffff);
+   $initreg_seed = $opts{regseed} if exists $opts{regseed};
+   $append_vsim .= " +initreg+$initreg_seed";
+   $append_vlog .= " +initreg=r";# randomize initial value of all 4-state variables, instead of using x's
+}
+if (exists $opts{sva}) {
+   $append_vsim .= " -sva";# enable assertions
+   $test_vlogargs .= " -test_vlogArgs +define+ENABLE_COVERAGE";
+   $ENV{ENABLE_COVERAGE} = 1;
+   $append_vlog .= " +define+ENABLE_COVERAGE";
+} elsif (exists $opts{nosva}) {
+   $append_vsim .= " -sva";# disable assertions
+   # MODELSIM BUG - $append_vsim .= " -nosva";# disable assertions
+}
+
+$compile_results = "$cwd/results";
+$regressions_dir = "$compile_results/tests";
+$modelsim = "$compile_results/mti_lib/$ENV{MODELSIM_VERSION}/modelsim.ini";
+
+my $dofile_dir = "$compile_results/dofiles";
+run_cmd("ln -s $dofiles $compile_results/wave_dofiles");
+$wavectl = "$rcfiles/$unitname.rc";# for verdi wave display
+$wavectl = "" unless -e $wavectl;
+$wavedo  = "$dofiles/$unitname.do";
+#$wavedo = "" unless -e $wavedo;
+print "WAVE: $wavedo ($dofiles/$unitname)\n";
+
+update_ctlfile();# write out ctl file
+exit if exists $opts{clear};
+
+process_standalone();
+
+if (exists $opts{i} && !(exists $opts{I}) && $nb_pool ne "") {
+   my $cmd = "nbq -i";
+   my $pool = $nb_pool;
+   my $slot = "";
+   $pool = $opts{ipool} if $opts{ipool};
+   $slot = $opts{slot} if $opts{slot};
+   $slot = $opts{islot} if $opts{islot};
+   $cmd .= " -P $pool" if $pool ne "";
+   $cmd .= " -Q $slot" if $slot ne "";
+   $cmd .= " $0 -I -P $cmdline";
+   unless (exists $opts{tl}) {
+      $cmd .= " $testname" unless $test_given == 1;
+      $cmd .= " $runmode" unless $runmode_given == 1;;
+   }
+   print "NetBatch Cmd: $cmd\n";
+   run_cmd($cmd);
+   exit 0;
+}
+
+print "\nRunning: unit=$unitname block=$block test=$testname mode=$runmode...\n\n";
+print "Regressions directory: $regressions_dir\n";
+
+if ($opts{zaptests}) {
+   print "Deleting test results directories...\n";
+   run_cmd("rm -fr $regressions_dir") if $regressions_dir =~ /results/;
+} else {
+   unless ($opts{nozaptest}) {
+      unless ($opts{tl}) {
+         print "Deleting test results directory...\n";
+         run_cmd("rm -fr $regressions_dir/$simname/*") if $regressions_dir =~ /results/;# being very careful
+      }
+   }
+}
+if ($opts{zap} || $opts{clean}) {
+   print "Deleting compile results directories...\n";
+   run_cmd("rm -fr $compile_results/* $randomTestsDir");
+   exit 0 if $opts{clean};
+}
+if ($opts{dzap}) {
+   run_cmd("drm $compile_results/* $randomTestsDir");
+}
+
+run_cmd("mkdir -p $dofile_dir");
+
+eval { # Trap errors or terminations under eval {}
+   unless ($opts{C}) { # Compile first
+      print "Compiling $unitname...\n";
+      exit 1 if compile("",$append_vlog);
+   }
+
+   unless ($opts{S}) { # Now execute simulation
+      $tests_run = 0;
+      $submits_left = 0;
+      if ($opts{tl}) { # run all tests in testlist
+         run_testlist($opts{tl});
+#         $tl = get_testlist(list=>$opts{tl},block=>$block);
+#         foreach $tname (@{$tl}) {
+#            my ($test,$rmode) = split(/:/,$tname);
+#            parse_and_run_test(test=>$test,runmode=>$rmode);
+#         }
+      } else {
+         if ($testname ne "") { #  run single test
+            parse_and_run_test(test=>$testname,runmode=>$runmode);
+        } else {
+            print "No testname given or remembered\n";
+         }
+      }
+   }
+
+   wrapup();# wrapup and exit
+}; # end eval
+if ($@) {
+   print "$@\n";
+   exit 1;
+}
+
+# Parse and run one test - runs all or selected runmodes
+# args: block=>, test=>, runmode=>
+sub parse_and_run_test {
+   my %args = @_;
+   
+   if ($args{runmode} ne "") {
+      runtest(block=>$args{block},test=>$args{test},runmode=>$args{runmode});
+   } else {
+      $runmodes = get_runmodes($args{test});
+      if ($runmodes ne "") {
+         foreach $runmode (keys %{$runmodes}) {
+            runtest(block=>$args{block},test=>$args{test},runmode=>$args{runmode});
+         }
+      } else {
+         runtest(block=>$args{block},test=>$args{test});
+      }
+   }
+}
+
+sub run_testlist {
+   my $tl = shift;
+   my $cmd = "ace";
+   $cmd .= " -b" unless $opts{B};
+   $cmd .= " -x";
+   $cmd .= " $pwa_option";
+   foreach (@{$cfg->{dsp_list}}) {
+      $cmd .= " -dsp $_";
+   }
+   #$cmd .= " $exe_mode $append_cmd";
+   my $status;
+   $cmd .= " -nb -nonbmon" unless exists $opts{NB};
+   $cmd .= " -q" if exists $opts{q};
+   $cmd .= " $opts{ace}" if exists $opts{ace};
+   $cmd .= " -model $opts{model}" if exists $opts{model};
+   $cmd .= " -tl $tl";
+   $cmd .= " -rl $opts{rl}" if exists $opts{rl};
+   $cmd .= " -tool_debug" if $opts{tool_debug};
+   run_cmd($cmd);
+}
+
+# Run one individual test
+# args: block=>, test=>, runmode=>
+sub runtest {
+   my %args = @_;
+   my $loop = 1;
+   my $save_append_vsim = $append_vsim;
+   my $dofile,$ucdbfile;
+   return if (exists $excludes{$args{test}} || exists $excludes{$args{runmode}});
+   print "Runtest: model=$unitname block=$args{block}, test=$args{test}, runmode=$args{runmode}\n";
+   #$loop = $opts{loop} if exists $opts{loop};
+   foreach (1..$loop) {
+      my $cmd = "ace";
+      $cmd .= " -b" unless $opts{B};
+      $cmd .= " -x";
+      $cmd .= " $pwa_option";
+
+      if (exists $opts{dg}) {
+         $cmd .= " -dg";
+      } else {
+         foreach (@{$cfg->{dsp_list}}) {
+            $cmd .= " -dsp $_";
+         }
+      }
+      #$cmd .= " $exe_mode $append_cmd";
+      my $status;
+#      $cmd .= " -testtype $testtype";
+      $cmd .= " -nb -nonbmon" if exists $opts{nb};
+      $cmd .= " -sd" if exists $opts{gui};
+      $cmd .= " -q" if exists $opts{q};
+      $cmd .= " $opts{ace}" if exists $opts{ace};
+      $cmd .= " -model $unitname";
+      $cmd .= " -fsdb" if exists $opts{fsdb};
+      $cmd .= " -loops $opts{loops}" if exists $opts{loops};
+      $cmd .= " -code_coverage_on" if exists $opts{cover};
+      $cmd .= " -timeout $opts{timeout}" if exists $opts{timeout};
+      $cmd .= " -set_debug_levels $opts{set_debug_levels}" if exists $opts{set_debug_levels};
+      $cmd .= " -stackdump_on_abort" if $opts{coe};
+      $cmd .= " -nocleanup" if exists $opts{nocleanup};
+      #if (exists $args{block} && $args{block} ne '') {
+#      $cmd .= " -block \'$args{block}\'";
+#      $cmd .= " -runmode \'$args{runmode}\'";# if exists $args{runmode} && $args{runmode} ne '';
+      if (exists $opts{aceloop}) {
+         $acetl = "";
+         for (1..$opts{aceloop}) {
+            $acetl .= "," if $acetl ne "";
+            $acetl .= "$args{test}:seed_" . sprintf("%08x",int rand(0x7fffffff));
+         }
+         $cmd .= " -tl $acetl";
+      } else {
+         $cmd .= " -t $args{test}";
+         $cmd .= ":$args{runmode}" if $args{runmode} ne '';
+         if (exists $opts{seed}) {
+            #$cmd .= ":seed_$random_seed" unless $args{runmode} ne '';
+            #$cmd .= "_seed_$random_seed" if $args{runmode} ne '';
+            $cmd .= " -rseed $random_seed";
+         }
+         $cmd .= " -tl $opts{dtl}" if exists $opts{dtl};
+      }
+      $ucdbfile = "$args{test}";
+      #$ucdbfile .= "__$args{runmode}" if $args{runmode} ne ''; #$ucdbfile .= "_$random_seed" if $opts{seed};
+      $dofile = "$dofile_dir/$ucdbfile.do";
+      $ucdbfile .= ".ucdb";
+      write_dofile(file=>$dofile,ucdb=>$ucdbfile);
+      unless (exists $opts{xloops}) {
+         #$cmd .= " -do do\\ $dofile";
+         $cmd .= " -do \"do $dofile\"";
+         #$cmd .= " -dof $dofile";
+      }
+      #$boerne = "-boerneVsimDoArgs $dofile $test_vlogargs";
+      $cmd .= " -sim_args \'$append_vsim\'" if $append_vsim ne "";
+      $append_vsim = $save_append_vsim;# for next iteration
+      if ($submits_left <= 0) { # get approval to submit more jobs, else wait
+         do {
+            $submits_left = get_submit_count();
+            if ($submits_left == 0) {
+               print "Number of waiting jobs exceeds limit of $max_waiting, sleeping $submit_wait_time seconds...\n";
+               sleep($submit_wait_time) 
+            }
+         } while ($submits_left == 0);
+      }
+      $submits_left--;
+      print "\nSimulating unit=$unitname block=$args{block} test=$args{test} runmode=$args{runmode} seed=$random_seed\n";
+      #execute_and_capture($cmd,"Simulation time: ");
+      run_cmd($cmd);
+      my %genargs = ();
+      $genargs{test} = $args{test};
+      $genargs{runmode} = $args{runmode} if exists $args{runmode};
+      $genargs{seed} = $random_seed if $opts{seed};
+      get_filenames(%genargs);
+      #`echo $ucdbfile > $simdir/ucdbptr.dat`;
+      #get_ucdbfile($simdir);
+      unless ($opts{nb} || $opts{loops}) {
+         if (-e "$simdir/postsim.pass") {
+            print "\n*** Simulation PASSED ***\n";
+            $status = "PASSED";
+         } elsif (-e "$simdir/postsim.fail") {
+            print "\n*** Simulation FAILED ***\n";
+            $status = "FAILED";
+         } else {
+            print "\n*** Simulation did not start ***\n";
+            $status = "No-Start";
+         }
+         my @files = glob("$simdir/*");
+         foreach $f (@files) {
+            run_cmd("rm -f $f") if -z $f;# delete zero-sized files
+         }
+         $results{$args{test}}{$args{runmode}}{$random_seed} = $status;
+         print "\nSim logfile: $logfile\n";
+         print "\n";
+         wrapup() if ((exists $opts{sof}) && $status eq "PASSED");
+      }
+      $tests_run++;
+      if ($opts{max}) {
+         wrapup() if $tests_run >= $opts{max};
+      }
+      if (exists $opts{seed}) {
+         # generate seed for next iteration, if needed
+         $random_seed = $opts{seed};
+         $random_seed = sprintf("%08x",int rand(0x7fffffff)) if $opts{seed} eq "gen"; 
+         $cfg->{seed} = $random_seed;
+      }
+    }
+}
+
+# Returns count of how many jobs may be submitted to NetBatch
+# Limits number of waiting jobs in NetBatch to max of $max_waiting
+sub get_submit_count {
+   return 100 ;
+   my $pool = "";
+   $pool = "-P $opts{pool}" if exists $opts{pool};
+   my $cmd = "nbqstat -s $pool user=$user|";
+   open(CH,$cmd) || die "Cannot execute $cmd\n";
+   my $wait_count = 0;
+   while (<CH>) {
+      $wait_count = $1 if /WAITING queue:\s+(\d+)/; 
+   }
+   close CH;
+   return ($wait_count >= $max_waiting) ? 0 : ($max_waiting - $wait_count);
+}
+
+# Returns number of available servers for given netbatch pool
+sub get_avail_servers {
+   return ;
+   my $pool = shift;
+   my $cmd = "nbstat -s -P $pool|";
+   my $avail = 0;
+   open (CH,$cmd) || die "Cannot execute $cmd\n";
+   while (<CH>) {
+      $avail = $1 if /Available:\s*(\d+)/;
+   }
+   close CH;
+   return $avail;
+}
+
+# Returns Netbatch pool that has servers available for processing
+sub get_pool {
+   my $pool = "";
+   foreach my $p (@netbatch_pools) {
+      if (get_avail_servers($p) >= $iq_min) {
+         $pool = $p;
+         last;
+      }
+   }
+   return $pool;
+}
+
+sub wrapup {
+   if ($opts{nb}) {
+      print "$tests_run jobs submitted\n";
+   } else {
+      report_results() if ($tests_run > 1  && !(exists $opts{nb}));
+   }
+   exit 0;
+}
+
+sub report_results {
+   my $total = 0;
+   my $passed = 0;
+   foreach $test (keys %results) {
+      foreach $runmode (keys %{$results{$test}}) {
+         foreach $seed (keys %{$results{$test}{$runmode}}) {
+            $status = $results{$test}{$runmode}{$seed};
+            printf "%8s %24s %24s %s\n",$status,$test,$runmode,$seed;
+            $passed += ($status eq "PASSED") ? 1 : 0;
+            $total++;
+         }
+      }
+   }
+   print "\n*** $passed out of $total tests passed\n";
+}
+
+# Compile design
+# syntax: compile(compile-src,append-options);
+sub compile {
+   my $compile_option = shift;
+   my $append_option = shift;
+   my $cmd = "ace $pwa_option";# $compile_option $append_cmd";
+   $cmd .= (exists $opts{cc}) ? " -cc" : " -c";
+   $cmd .= " -model $unitname";
+   $cmd .= " $append_option";
+   if (exists $opts{dg}) {
+      $cmd .= " -dg";
+   } else {
+      foreach (@{$cfg->{dsp_list}}) {
+         $cmd .= " -dsp $_";
+      }
+   }
+   $cmd .= " -mti_trace_vlog_calls" if $opts{trace};
+#   $cmd .= " -GLS udel" if $opts{gls};
+#   $cmd .= " -append_vlog \"-vlogArgs \'$append_option\'\"" if $append_option ne "";
+   #execute_and_captyre($cmd,"Compile time: ");
+   run_cmd($cmd);
+}
+
+# Execute given command, capturing output and parsing for error log
+# Display errors from error log
+sub execute_and_capture {
+   my $cmd = shift;
+   my $msg = shift;
+   my $failed = 0;
+   my $linecount = 0;
+   my @errlogs;
+   my $errlog;
+   my $start_time = time();
+
+   unless ($opts{K}) {
+      print "Executing: $cmd\n";
+      if (capture_cmd($cmd)) {
+         while (<CMD>) {
+            $linecount++;
+            print "Line: $linecount\015";
+            $failed = 1 if /ERROR:/;
+            next if /^\s*Target\[/;
+            next if /which is unwriteable and doesn't yet exist/;
+            print;
+            if (/full path:\s*(\S+)/) {
+               $errlog = $1;
+               run_cmd("grep -i error $errlog");
+               push @errlogs,$errlog;
+            }
+         }
+         close(CMD);
+      }
+      display_runtime($msg,$start_time);
+   } else {
+      run_cmd($cmd);
+      print "Exit value = $exit_value\n";
+      display_runtime($msg,$start_time);
+      return 1 if $exit_value != 0;
+   }
+   if ($failed == 1) {
+      foreach (@errlogs) {
+         print "$_\n";
+      }
+      return 1;
+   }
+   return 0;
+}
+
+#gen_files();
+
+###### Process standalone options ######
+sub process_standalone {
+
+   my %genargs = ();
+   $genargs{test} = $testname;
+   $genargs{runmode} = $runmode;
+   $genargs{seed} = $opts{seed} if exists $opts{seed};
+   get_filenames(%genargs);
+
+   if ($opts{l}) {
+      my $lgf = $logfile;
+      $lgf = $logfile . ".gz" unless -e $lgf;
+      $lgf = $ilogfile unless -e $lgf;
+      $lgf = $ilogfile if $opts{li};
+      run_cmd("$logview $lgf");
+      exit 0;
+   }
+
+   if ($opts{lv}) {
+      fork and exit;# leave child running in background, terminate parent
+      setpgrp 0, 0;# isolate child from parent
+      my $lgf = $logfile;
+      $lgf = $logfile . ".gz" unless -e $lgf;
+      $lgf = $ilogfile unless -e $lgf;
+      $lgf = $ilogfile if $opts{li};
+      print "Logfile: $lgf\n";
+      run_cmd("$logview $lgf");
+      exit 0;
+   }
+
+   if ($opts{axi}) {
+      $trkfile = "$simdir/AXI_TRK.out";
+      $trkfile = $trkfile . ".gz" unless -e $trkfile;
+      run_cmd("$less $trkfile");
+      exit 0;
+   }
+
+   if ($opts{axif}) {
+      $trkfile = "$simdir/$opts{axif}.out";
+      $trkfile = "$simdir/$opts{axif}" unless -e $trkfile;
+      $trkfile = "$simdir/$opts{axif}_TRK.out" unless -e $trkfile;
+      $trkfile = $trkfile . ".gz" unless -e $trkfile;
+      run_cmd("$less $trkfile");
+      exit 0;
+   }
+
+   if ($opts{ls}) {
+      run_cmd("ls -l $simdir");
+      print "cd $cwd/$simdir\n";
+      exit 0;
+   }
+
+   if ($opts{postsim}) {
+      run_cmd("cat $postsimlog");
+      exit 0;
+   }
+
+   if ($opts{unzip}) {
+      system("gzip -d ${logfile}.gz");
+      exit 0;
+   }
+
+   if ($opts{t}) {
+      run_cmd("tail -f $logfile");
+      exit 0;
+   }
+
+   if ($opts{bug}) {
+      print "Copyting logfile and wavefile to $bugs/$opts{bug}\n";
+      run_cmd("cp $logfile $bugs/$opts{bug}.log");
+      run_cmd("cp $fsdb $bugs/$opts{bug}.fsdb") if -e $fsdb;
+      run_cmd("cp $wavefile $bugs/$opts{bug}.wlf") if -e $wavefile;
+      chdir $bugs;
+      print `pwd`;
+      exit 0;
+   }
+
+   if ($opts{et}) {
+      #fork and exit;# leave child running in background, terminate parent
+      #setpgrp 0, 0;# isolate child from parent
+      foreach my $testdir (@test_dirs) {
+         $testdir = find_source($testdir);
+         if (-e $testdir) {
+            my @files = glob("$testdir/$testname/*");
+            run_cmd("$editor @files");
+            exit 0;
+            last;
+         }
+      }
+   }
+
+   if ($opts{grepall}) {
+      $cmd = "find regressions -name postsim.log -exec grep -i error '{}' \\; \| egrep -v \"okErrors|SIMPLI Error Count|Logfile Error Count\"|";
+      print "Execute: $cmd\n";
+      open CMD, $cmd || die "Cannot execute cmd\n";
+      while (<CMD>) {
+         print ;
+      }
+      exit 0;
+   }
+
+   if ($opts{view}) {
+      my $dof = "$simdir/wave.do";
+      write_dofile(file=>$dof,sub=>$wavedo,wavefile=>$wavefile);
+      fork and exit;# leave child running in background, terminate parent
+      setpgrp 0, 0;# isolate child from parent
+      run_cmd("vsim -view $wavefile -wlfnolock -do $dof");
+      exit 0;
+   }
+
+   if ($opts{verdi}) {
+      fork and exit;# leave child running in background, terminate parent
+      setpgrp 0, 0;# isolate child from parent
+      run_cmd("verdi -ssf $fsdb -sswr $wavectl");
+      exit 0;
+   }
+
+   merge_coverage() if $opts{merge};
+   show_results() if $opts{results};
+
+   if ($opts{viewcov} || $opts{viewmerge}) { # view merged coverage results
+      fork and exit;# leave child running in background, terminate parent
+      setpgrp 0, 0;# isolate child from parent
+      $ENV{MODELSIM} = $modelsim;
+      if ($opts{viewmerge}) {
+         run_cmd("vsim -viewcov $merge_dir/merged.ucdb");
+      } else {
+         #my $ucdbfile = get_ucdbfile($simdir);
+         #my $dof = "$simdir/wave.do";
+         #write_dofile(file=>$dof,sub=>$wavedo,wavefile=>$wavefile);
+         my $ucdbfile = $simname . ".ucdb";
+         my $cmd = "vsim -viewcov $simdir/$ucdbfile";
+         #$cmd .= " -view $wavefile -wlfnolock -do $dof" if -e $wavefile;# view waves as well if exist
+         print "$cmd\n";
+         run_cmd($cmd);
+         #run_cmd("vsim -viewcov $simdir/test_cov.ucdb");
+      }
+      exit 0;
+   }
+
+   # Show coverage results already generated and merged in regressions/
+   if ($opts{showcov}) {
+      show_coverage();
+      exit 0;
+   }
+
+   if ($opts{zapp}) { # delete all passing regressions
+      $cmd = "find $regressions_dir -name postsim.pass|";
+      open(CH,$cmd) || die "Cannot execute $cmd\n";
+      while (<CH>) {
+         chomp;
+         s/\/postsim.pass//;
+         `rm -fr $_` if /^\./;
+      }
+      exit 0;
+   }
+
+}
+
+sub show_results {
+   my $status,$elab_tiume,$sim_time,$mod_time,$host,$fsize,$logfile,$simdir;
+   my $rdir;
+   my %results;
+   print "\n";
+   unless ($opts{summary}) {
+      printf "%16s %48s  %10s %16s %s\n",
+         "----------- unit -----------","------------------- test -------------------","- status -","----- time ----","  duration  --Clocks--  Hertz";
+   }
+   if (opendir(DH,$regressions_dir)) {
+      @dirlist = readdir(DH);
+      foreach (@dirlist) {
+			chomp;
+         next if /^\./;
+			my $file = "$regressions_dir/$_/postsim.log";
+			my ($base,$simdir,$suffix) = fileparse($file,'\..*');
+         my $test = $_;
+			my $unit = "";
+         my $simtimefile = "$simdir/sim_timing_results.dat";
+			$logfile = "$simdir$test";
+			$logfile =~ s/_[^_]+$//;# remove _ul, _fc at end
+			$logfile .= ".mtilog";
+			$logfile .= ".gz" unless -e $logfile;
+			$mod_time = (stat ($file))[9];
+			$mod_time = format_date($mod_time);
+			$status = "NO RESULTS"; $host = ""; $elab_time = ""; $sim_time = ""; $postsim_time = "";
+         $sim_time = "";
+			if (open(FH,$file)) { # parse postsim.log 
+				while (<FH>) {
+               chomp();
+					$status = $1 if /^\s+Status\s*:\s*(.+)/;
+					$host = $1 if /^\s+Host Machine\s+:\s*(\w+)/;
+					$elab_time = $1 if /^\s+Elab Time\s+:\s*(.+)/;
+					$sim_time = $1 if /^\s+Runtime\s+:\s*(.+)\s*/;
+					$postsim_time = $1 if /^\s+Postsim Time\s+\(s\)\s*:\s+(.+)/;
+				}
+				close FH;
+			} else {
+				$status = "NO RESULTS";
+				$status = "COMPIL ERR" if -e "${simdir}test_vlog.log.err";
+			}
+			$unit = get_unit($test);
+			$results{$unit}{$status}++;
+			$total_results{$status}++;
+			$test_count{$unit}++;
+
+			$fsize = (stat ($logfile))[7]/1000000;
+         unless ($opts{summary}) {
+            printf "%28s %48s: %10s %16s",$unit,$test,$status,$mod_time;
+            if ($sim_time ne "") {
+               printf "  %9s\n",format_time($sim_time);
+            } elsif (-e $simtimefile) {
+               $_ = `cat $simtimefile`;
+               ($stime,$sclocks,$shz) = /time:\s+(\S+)\s+Clocks:\s+(\S+)\s+Hz:\s+(\S+)/;
+               printf "  %9s %11d  %5d\n",$stime,$sclocks,$shz;
+            } else {
+               print "\n";
+            }
+         }
+		}
+	}
+	close CH;
+	print "\n";
+	printf "%40s ","Unit";
+	foreach $f (keys %total_results) {
+		printf "%12s ",$f;
+	}
+	print " Total\n";
+	printf "%40s ","------------------------";
+   foreach $f (keys %total_results) {
+		print " ------------";
+	}
+	print " -----\n";
+   foreach my $unit (keys %results) {
+      printf "%40s ",$unit;
+		foreach $f (keys %total_results) {
+			printf " %12d",$results{$unit}{$f};
+		}
+		printf " %5d\n",$test_count{$unit};
+   }
+	printf "%40s ","";
+   foreach $f (keys %total_results) {
+		print " ------------";
+	}
+	print " -----\n";
+	$total = 0;
+	printf "%40s ","Totals";
+   foreach $f (keys %total_results) {
+      printf " %12d",$total_results{$f};
+		$total += $total_results{$f};
+   }
+	printf " %5d\n",$total;
+   exit 0;
+}
+
+# get list of tests for unit
+sub get_tests {
+   my $testdir;
+   my @dirlist = ();
+   foreach $testdir (@test_dirs) {
+      $testdir = find_source($testdir);
+      print "Looking for tests in $testdir\n";
+      unless (-e $testdir) {
+         print "WARNING: Cannot open $testdir tests directory\n"; 
+      } else {
+         my $cmd = "find $testdir -follow -type d|";
+         open (CH,$cmd) || die "Cannot execute $cmd\n";
+         while (<CH>) {
+            chomp;
+            next if /CVS/;
+            next if $_ eq $testdir;
+            push @dirlist, $_;
+         }
+         close CH;
+      }
+   }
+   return \@dirlist;
+}
+
+# get UDF files from Includes key of primary UDF file
+sub get_udf_files {
+   my ($udf_list) = @_;
+   my $udf;
+   get_primary_udf(\$scope,\$udf);
+   print "Primary UDF: $scope - $udf\n";
+   my $perl = get_perl_code($udf);
+   eval $perl;
+   if ($@) {
+      print "Error parsing $udf:\n";
+      die "$@\n";
+   }
+   foreach my $f (@{$audf{Includes}}) {
+      #print "Include: $f\n";
+      push @{$udf_list}, $f;
+      get_udf_defaults($f);
+   }
+}
+
+# get default model and test from given UDF file
+sub get_udf_defaults {
+   my $udf = shift;
+   print "Searching for udf: $udf\n";
+   my $perl = get_perl_code($udf);
+   eval $perl;
+   if ($@) {
+      print "Error parsing $udf:\n";
+      die "$@\n";
+   }
+   if (exists $audf{InterfaceVars}{$scope}) {
+      $model = $audf{InterfaceVars}{$scope}{-model}{default} if exists $audf{InterfaceVars}{$scope}{-model}{default};
+      $default_test = $audf{InterfaceVars}{$scope}{-test}{default} if exists $audf{InterfaceVars}{$scope}{-test}{default};
+      print "Scope = $scope, Model = $model, test = $default_test\n";
+   }
+}
+
+# get primary UDF file defined in acerc file
+sub get_primary_udf {
+   my ($scope, $udf) = @_;
+   push @search_paths,$ENV{REL};
+   get_acerc();
+   $_ = $acerc{UDF}[0];
+   ($$scope,$$udf) = /(.*):(.*)/;
+   print "Primary UDF: $$scope - $$udf\n";
+   foreach $p (@{$acerc{SEARCH_PATHS}{$$scope}}) {
+      push @search_paths,$p;
+   }
+   foreach $p (@{$acerc{TEST_PATTERNS}}) {
+      push @test_dirs,$p;
+   }
+}
+sub get_acerc {
+   my $filename = find_source($acerc_file);
+   if (-e $filename) {
+      $filename = "$cwd/$filename" unless $filename =~ /^\//;
+      print "Setting ACE_RC to $filename\n";
+      $ENV{ACE_RC} = $filename 
+   }
+   my $perl = get_perl_code($filename);
+   eval $perl;
+   if ($@) {
+      print "Error parsing $filename:\n";
+      die "$@\n";
+   }
+   #print Data::Dumper->Dump($acerc);
+}
+
+# get list of runmodes for given test
+sub get_runmodes {
+   my $testname = shift;
+   my $ctlfile = "units/$unitname/tests";
+   $ctlfile .= "/$block" if $block ne "";
+   $ctlfile .= "/$testname/$testname" . ".ctl";
+   print "Looking for ctlfile: $ctlfile (block=$block, test=$testname)\n";# if $opts{dbg};
+
+   $ctlfile = find_source($ctlfile);
+	unless (-e $ctlfile) {
+		# See if unit prefix should be added to testname
+		$testname = "${unitname}_$testname";
+		$ctlfile = "units/$unitname/tests";
+		$ctlfile .= "/$block" if $block ne "";
+		$ctlfile .= "/$testname/$testname" . ".ctl";
+      $ctlfile = find_source($ctlfile);
+	}
+   unless (-e $ctlfile) {
+      #print "ERROR: Cannot open $ctlfile sim control file\n"; 
+      return "";
+   } else {
+      my $code = get_perl_code($ctlfile);
+      eval $code;
+      if ($@) {
+         print "ERROR Parsing $ctlfile:\n";
+         print "$@\n";
+      }
+      #print "$code\n";
+      print Data::Dumper->Dump([%params]) if $opts{dctl}; 
+      return $params{-runMode};
+   }
+}
+
+# get list of tests to execute from testlist
+# args: list=> block=>
+sub get_testlist {
+   my %args = @_;
+   my $tl = $args{list};
+   my $block = $args{block};
+
+   print "Looking for testlist=$tl\n";
+
+   my $ctlfile = find_testlist($tl);
+   $ctlfile = find_testlist("${ctlfile}.list") unless -e $ctlfile;
+   $ctlfile = find_testlist("${ctlfile}.tl") unless -e $ctlfile;
+   die "Cannot open $ctlfile testlist control file\n" unless -e $ctlfile;
+   my $code = get_perl_code($ctlfile);
+   eval $code;
+   if ($@) {
+      print "ERROR Parsing $ctlfile:\n";
+      print "$@\n";
+   }
+   #print $code if $opts{dctl};
+   return \@testlist;
+}
+
+# look for given testlist is all test directories
+sub find_testlist {
+   my $testlist = shift;
+   foreach my $path (@test_dirs) {
+      my $ctlfile = find_source("$path/$testlist");
+      return $ctlfile if -e $ctlfile;
+   }
+   return $testlist;
+}
+
+# Display all available testlists, prompt for selection
+sub select_testlist {
+   my %lists = ();
+   my $select;
+   local (*CH);
+   print "\nAvailable testlists:\n";
+   foreach (@test_dirs) {
+      next unless /testlist/;
+      my $tl_dir = $_;
+      my $path = find_source($tl_dir);
+      print "Searching: $path\n";
+      my $cmd = "find $path -follow -type f|";
+      my $i = 1;
+      open CH, $cmd || die "Cannot execute cmd: $cmd\n";
+      while (<CH>) {
+         s/.*\///;# just show final component
+         next unless /\./;
+         chomp;
+         printf "   %3d $tl_dir/$_\n",$i;
+         $lists{$i} = "$tl_dir/$_";
+         $i++;
+      }
+      close CH;
+   }
+   do {
+      print "Select testlist: ";
+      $select = <STDIN>; chomp($select);
+   } until (exists $lists{$select});
+   return $lists{$select};
+}
+
+# Defer file name calculation until after they are created
+# args: test=>, runmode=>, seed=>
+sub get_filenames {
+   my %args = @_;
+   my $test = $args{test};
+   my $runmode = "", $seed = "";
+   $runmode = "__$args{runmode}" if ((exists $args{runmode}) && ($args{runmode} ne ""));
+   $seed = "seed_$args{seed}" if exists $args{seed};
+   $simname = "${test}${runmode}";
+   $simdir = "$regressions_dir/$simname";
+   print "Looking for $simdir...\n";
+   #$simdir = "$regressions_dir/${test}${runmode}$pad${seed}_${xdr}fc" unless -d $simdir;
+   #$simdir = "$regressions_dir/${test}${runmode}$pad${seed}_${xdr}ul" unless -d $simdir;
+   $logfile = "$simdir/sim.log";
+   $postsimlog = "$simdir/postsim.log";
+   $fsdb = "$simdir/${test}.fsdb";
+   $wavefile = "$simdir/vsim.wlf";
+   $results_file = "$simdir/sim_timing_results.dat";
+}
+
+# spin through all files in regressions directory, and merge coverage results
+sub merge_coverage {
+   my $outfile = "$merge_dir/merged.ucdb";
+   my $srcfile = "$regressions_dir/merge_files.dat";
+   my $dir,@dirlist,$ucdbfile;
+   run_cmd("mkdir $merge_dir") unless -d $merge_dir;
+   run_cmd("rm -f $srcfile");
+   $ENV{MODELSIM} = $modelsim;
+   print "\n";
+   if (opendir(DH,$regressions_dir)) {
+      @dirlist = readdir(DH);
+      while (@dirlist) {
+         open (SH,'>',$srcfile) || die "Cannot open file: $srcfile\n";
+         my $i = 0;
+         while (@dirlist && $i < $max_merge_count) {
+            $_ = shift @dirlist;
+            next if /^\./;
+            chomp;
+            next unless -e "$regressions_dir/$_/postsim.pass";# merge only passing sims
+            next unless -e "$regressions_dir/$_/$_.ucdb";
+            #$ucdbfile = get_ucdbfile("$regressions_dir/$_");
+            #print SH "$regressions_dir/$_/$ucdbfile\n";
+            print SH "$regressions_dir/$_/$_.ucdb\n";
+            #print SH "$regressions_dir/$_/test_cov.ucdb\n";
+            $i++;
+         }
+         close SH;
+         run_cmd("vcover merge -quiet -input $srcfile $outfile");
+         run_cmd("rm $srcfile");
+      }
+	}
+	close DH;
+   $cmd = "vcover report -totals $outfile";
+   print "Executing: $cmd\n";
+   run_cmd($cmd);
+   exit 0;
+}
+	
+# Retrieve UCDB filename from $simdir/ucdbptr.dat
+sub get_ucdbfile {
+   my $dir = shift;
+   my $ucdb = `cat $dir/ucdbptr.dat`;
+   chomp $ucdb;
+   #print "UCDB: $ucdb ($dir)\n";
+   return $ucdb;
+}
+
+# write out dofile
+# syntax: write_dofile(file=>"name",sub=>"name",ucdb=>"name");
+# Calls sub dofile if given
+sub write_dofile {
+   my %args = @_;
+   my $ucdbfile;
+   my $df;
+   if ($args{file} ne "") {
+      open(DF,">$args{file}") || die "Cannot open file to write: $args{file}\n";
+      $_ = $args{file};
+      s/\.do/.ucdb/;
+      $ucdbfile = $_;
+      my ($base,$simdir,$suffix) = fileparse($ucdbfile,'\..*');
+      $ucdbfile = "$base$siffix";
+      if (exists $opts{trace}) {
+         print DF "SetVlogTrace on\n";
+      }
+      print DF "radix hex\n";
+      print DF "add button Quit {transcribe quit -f} Disable\n";
+      print DF "set PrefMain(forceQuit) 1\n";
+      if (exists $args{sub}) {
+         print DF "do $args{sub}\n" if -e $args{sub};
+         print DF <<EOF;
+proc make_buttons {} {
+#   add_menu .main_pane.mdi.interior.cs.vm.paneset.cli_0.wf.clip.cs Mine
+   add_menu "" Mine
+   add_menuitem "" Mine "Reload Wavefile" reload
+   add_menuitem "" Mine "Save Signals File" save
+   add_menuitem "" Mine "Open New Wavefile" wave_swap
+   add_menuitem "" Mine "Quit" {quit -f}
+}
+
+proc save {} {
+   write format wave $args{sub}
+}
+
+proc reload {} {
+   set current_env [env -nodataset]
+   set wave_win [view wave]
+   set vert_scroll [\$wave_win.tree index @1,0]
+#   write format wave wave.do 
+   dataset close -all
+
+   dataset open $args{wavefile}
+#   do wave.do
+   do $args{sub}
+   env \$current_env
+   set wave_win [view wave]
+   \$wave_win.tree see2 \$vert_scroll
+}
+
+proc wave_swap {} {
+	set ldset [dataset list]
+
+	if { \$ldset ne "" } {
+		set current_dataset [getCurrentNamespace]
+		dataset close \$current_dataset
+	}
+	DSBOpenDataSetDialog
+   reload
+}
+
+make_buttons\n
+EOF
+      } else {
+         print DF "proc wrapup {} {\n";
+         if ($opts{memprof} || $opts{profile}) {
+#            print DF "   profile report -calltree\n"; 
+#            print DF "   profile report -structural\n";
+            print DF "   profile report -ranked\n";
+         }
+         print DF "   echo [tb]\n";# show traceback (stack trace)
+          #print DF "   tb\n";# show traceback (stack trace)
+         print DF "   echo [see 10]\n";# show last line executed
+         print DF "   echo [simstats]\n";# show last line executed
+         #print DF "   resume\n" unless $opts{gui};
+         print DF "   quit -f\n" unless $opts{gui};
+         print DF "}\n";
+         unless ($opts{gui}) {
+            print DF "onbreak { wrapup; quit -f }\n";
+            print DF "onerror { wrapup; quit -f }\n";
+            #print DF "onbreak { wrapup; resume }\n";
+            #print DF "onerror { wrapup; resume }\n";
+            #print DF "onbreak resume\n";
+            #print DF "onerror resume\n";
+            print DF "onElabError { quit -f }\n";
+         }
+#   print DF "abort all\n";
+         print DF "set WLFDeleteOnQuit 0\n";
+         #print DF "set UCDBFilename $ucdbfile\n";
+         #print DF "coverage save -onexit $ucdbfile\n";
+         print DF "log -r /*\n" if $opts{wave};
+         print DF "profile on -m\n" if $opts{memprof};
+         print DF "profile on -p\n" if $opts{profile};
+         print DF "profile interval $opts{interval}\n" if $opts{interval};
+         print DF "profile option collapse_sections\n";
+         print DF "profile option collect_calltrees on\n" if $opts{calltree};
+         print DF "set IterationLimit 1000000\n";
+         if (exists $opts{pre_do}) {
+            $df = "$dofiles/$opts{pre_do}";
+            $df = $opts{pre_do} unless -e $df;
+            print DF "do $df\n";
+         } 
+         print DF "run -all\n" unless $opts{gui};
+         if (exists $opts{post_do}) {
+            $df = "$dofiles/$opts{post_do}";
+            $df = $opts{post_do} unless -e $df;
+            print DF "do $df\n";
+         }
+         print DF "wrapup\n" unless $opts{gui};
+         print DF "quit -f\n" unless $opts{gui};
+      }
+      close(DF);
+   }
+}
+
+# Write out control file
+sub update_ctlfile {
+   run_cmd("cp $gosim_cfgfile ${gosim_cfgfile}.bak");
+   open FH,">$gosim_cfgfile" || die "Cannot open $gosim_cfgfile\n";
+   print FH Data::Dumper->Dump([$cfg],["cfg"]);
+   close FH;
+}
+
+# Looks for file in local PWA, else looks for it in SEARCH_PATH defined in acerc file
+# Returns full path.
+sub find_source {
+   my $filename = shift;
+   print "find_source: looking for $filename...\n" if $opts{dbg};
+   return $filename if -e $filename;
+   foreach $path (@search_paths) {
+      my $rfile = "$path/$filename";
+      print "find_source: looking for $rfile...\n" if $opts{dbg};
+      return $rfile if -e $rfile;
+   }
+   #die "Cannot file file: $filename (or $rfile)\n";
+   return $filename;
+}
+
+# read given file, return as concatenated string that can be executed
+sub get_perl_code {
+   my ($filename) = @_;
+   my $fn = find_source($filename);
+
+   local (*FH);
+   my $perl_code = "";
+
+   open (FH,$fn) || die "Cannot open perl file: $fn\n";
+   while (<FH>) {
+      $perl_code .= $_;
+   }
+   close FH;
+   $perl_code;
+}
+
+# given time in seconds, return as HH:MM:SS
+sub format_time {
+   my $seconds = $_[0];
+   my ($hour,$min,$sec,$time);
+   $hour = int($seconds / 3600);
+   $min = int(($seconds % 3600) / 60);
+   $sec = $seconds % 60;
+   $time = sprintf("%02d:%02d:%02d",$hour,$min,$sec);
+}
+
+# given epoch time, returns formatted date/time string
+sub format_date {
+   my $date = $_[0];
+   my $result;
+   my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime($date);
+   $result = sprintf "%3s %2d %02d:%02d:%02d",$month[$mon],$mday,$hour,$min,$sec;
+}
+
+sub post_runtime {
+   my $msg = shift;
+   my $start = shift;
+
+   my $time = localtime();
+   my $runtime = format_time(time() - $start);
+   my $line = "$msg $runtime @ $time\n";
+   push @summary,$line;
+}
+
+sub display_runtime {
+   my $msg = shift;
+   my $start = shift;
+
+   post_runtime($msg,$start);
+   print $summary[-1];
+}
+
+# find unit name at start of given string (unit_test)
+sub get_unit {
+	my $test = shift;
+	my @comps = split(/_/,$test);
+	my $unit = $comps[0];
+	my $last_unit;
+	my $dir = "$repository/units/$unit";
+	my $done = 0; my $first = 0;
+	while (@comps) {
+		if ($first == 0) {
+			$first = 1 if -d $dir;
+		} else {
+			last unless -d $dir;
+		}
+		$last_unit = $unit;
+		shift @comps;
+		$unit .= "_" . $comps[0];
+		$dir = "$repository/units/$unit";
+	}
+	return $last_unit;
+}
+
+# Read .gosim file from user's home directory, update options
+sub process_cfgfile {
+	my $option,$arg;
+   local *FH;
+   open(FH, "$ENV{HOME}/.gosimrc") || return;
+   while (<FH>) {
+		next if /^\s*#/;
+		next if /^\s*$/;
+		s/^\s*//;
+		s/^-//;
+		($option,$arg) = split;
+		unless (exists $opts{$option}) {
+			$opts{$option} = $arg eq "" ? 1 : $arg;
+		}
+		print "User Default: option=$option, arg=$arg\n" if $opts{dbg};
+	}
+   close FH;
+}
+
+# Get given option, set variable if option is given
+sub get_opt {
+	my $ref = shift;
+	my $option = shift;
+	$$ref = $opts{$option} if exists $opts{$option};
+}
+
+sub run_cmd {
+   my $cmdline = shift;
+   print "gosim: $cmdline\n";# if ($opts{X} || $opts{dbg});
+    #my @cmd = split('\s',$cmdline);
+    #my $cmd = shift @cmd;
+    #system $cmd, @cmd unless $opts{X};
+   system $cmdline unless $opts{X};
+   return $exit_value = $? >> 8;
+}
+
+sub capture_cmd {
+   my $cmd = $_[0];
+   open(CMD,"$cmd|") unless $opts{X};
+   return 1 unless $opts{X};
+   return 0 if $opts{X};
+}
+
+# Return arg if non-null, else return ''
+sub get_arg {
+   my $arg = shift;
+   return $arg ne "" ? $arg : "''";
+}
+
+
+# remove all occurrences of '../' from path
+sub clean_path {
+   my $path = shift;
+   my @pwa = split(/\//,$path);
+   my @new_path;
+   foreach my $p (@pwa) {
+      if ($p eq "..") {
+         $p = pop @new_path;
+      } else {
+         push @new_path,$p;
+      }
+   }
+   $path = join('/',@new_path);
+   return $path;
+}

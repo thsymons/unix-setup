@@ -1,0 +1,43 @@
+#!/bin/env python
+# Chase given file through any links to final target
+import sys, time, string, re, os, argparse, subprocess, shlex
+
+op = argparse.ArgumentParser(description="""
+Description of script goes here
+""")
+
+op.add_argument('-X',                 help='Show commands, but do not execute',action='store_true')
+op.add_argument('cmdline',            help='Positional arguments',nargs='*')
+opts = op.parse_args(sys.argv[1:])
+
+def run_cmd(cmd,quiet=None,read=None,always=False):
+  if not quiet:
+    print cmd
+  if not opts.X or always:
+    if not read:
+      return os.system(cmd)
+    else:
+      proc = subprocess.Popen(shlex.split(cmd),stdout=subprocess.PIPE)
+      return proc.stdout.readlines()
+  return 0
+
+file = opts.cmdline[0]
+
+def chase(link):
+  file = link
+  while True:
+    if os.path.islink(file):
+      path = os.readlink(file)
+      if path[0] != '/':
+        file = os.path.normpath(os.path.join(os.path.dirname(file), path))
+      else:
+        file = path
+    else:
+      return file
+
+for link in file.split(':'):
+  result = chase(link)
+  if os.path.exists(result):
+    print '%s -> %s' % (link, result)
+  else:
+    print '%s -> %s does not exist' % (link, result)

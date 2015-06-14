@@ -1,0 +1,13 @@
+#!/bin/csh
+# Diff cmdline args from two VCS compile log files
+# Syntax: diff_simargs file1 file2
+#
+
+set f1 = $argv[1]
+set f2 = $argv[2]
+
+grep Command: $f1 >dumpargs1.dat
+grep Command: $f2 >dumpargs2.dat
+
+show_diff --tkdiff --split dumpargs1.dat dumpargs2.dat
+

@@ -1,0 +1,45 @@
+#!/usr/bin/perl
+# Set title of Xterm window
+use Getopt::Std;
+use File::Basename;
+
+sub usage {
+print <<EOF;
+Syntax: $0 -Xh Title
+Sets title of Xterm window
+-X   : Debug only mode, do not execute
+-h   : Display this help
+EOF
+exit;
+}
+
+usage unless getopts('Xh');
+usage if $opt_h;
+
+$host = $ENV{HOST};
+
+$title = "$host";
+
+$title .= ":$ENV{PROJECT}" if exists $ENV{PROJECT};
+$title .= ":$ENV{ADAM_BASELINE}" if exists $ENV{ADAM_BASELINE};
+if (@ARGV) {
+   $title = $host . ":" . shift @ARGV; 
+} else {
+   $pwd = `pwd`;
+   chomp($pwd);
+   @pwd = split(/\//,$pwd);
+   $cwd = pop(@pwd);
+   $title .= ":" . $cwd if $cwd ne $ENV{ADAM_BASELINE};
+}
+
+run_cmd("xttitle $title");
+
+sub run_cmd {
+   my $cmdline = shift;
+   print "$cmdline\n" if $opt_X;
+   my @cmd = split('\s',$cmdline);
+   my $cmd = shift @cmd;
+   system $cmd, @cmd unless $opt_X;
+   $exit_value = $? >> 8;
+}
+

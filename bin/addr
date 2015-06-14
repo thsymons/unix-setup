@@ -1,0 +1,35 @@
+#!/bin/env python
+# Finds and optionally deletes broken symbolic links
+import sys, time, string, re, os, argparse, subprocess, shlex
+
+op = argparse.ArgumentParser(description="""
+Description of script goes here
+""")
+
+op.add_argument('-X',                 help='Show commands, but do not execute',action='store_true')
+op.add_argument('cmdline',            help='Positional arguments',nargs='*')
+opts = op.parse_args(sys.argv[1:])
+
+def run_cmd(cmd,quiet=None,read=None,always=False):
+  if not quiet:
+    print cmd
+  if not opts.X or always:
+    if not read:
+      return os.system(cmd)
+    else:
+      proc = subprocess.Popen(shlex.split(cmd),stdout=subprocess.PIPE)
+      return proc.stdout.readlines()
+  return 0
+
+arg = opts.cmdline[0]
+addr = int(arg, 16)
+cache_line = addr & 0x7fe0;
+line_addr = addr & 0xFFFFFFFE0;
+cache_tag = addr & 0xFFFFF8000;
+
+print "      addr = 0x%x" % addr
+print " line addr = 0x%x" % line_addr
+print "cache line = 0x%x (0x%x)" % (cache_line, cache_line >> 5)
+print " cache tag = 0x%x" % cache_tag
+
+

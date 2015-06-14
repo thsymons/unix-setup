@@ -1,0 +1,32 @@
+#!/usr/bin/perl
+# Retab file from within VIM
+# Call from VIM by highlighting lines,
+ 
+$tab_size = 3;
+$tab_spaces = " " x $tab_size;
+$last_len_in = 0;
+$last_len_out = 0;
+while (<>) {
+    chomp;
+    if (/^\s+/) {
+        $indent_in = $&; $text = $';
+        $len_in = length($indent_in);
+        if ($len_in > $last_len_in) {
+            $len_out += $tab_size;
+        } elsif ($len_in < $last_len_in) {
+            $len_out -= $tab_size;
+        } else {
+            $len_out = $last_len_out;
+        }
+        $indent_out = " " x $len_out;
+        print "$indent_out$text\n";
+        $last_len_in = $len_in;
+        $last_len_out = $len_out;
+    } else {
+        $last_len_in = 0;
+        $last_len_out = 0;
+        $len_out = 0;
+        print "$_\n" ;
+    }
+}
+

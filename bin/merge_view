@@ -1,0 +1,51 @@
+#!/bin/env python
+# Merge subrepos from referenced view in $REPOS into current view
+import sys, time, string, re, os, argparse, subprocess, shlex
+
+op = argparse.ArgumentParser(description="""
+Description of script goes here
+""")
+
+op.add_argument('-X',                 help='Show commands, but do not execute',action='store_true')
+op.add_argument('cmdline',            help='Positional arguments',nargs='*')
+opts = op.parse_args(sys.argv[1:])
+
+def run_cmd(cmd,quiet=None,read=None,always=False):
+  if not quiet:
+    print cmd
+  if not opts.X or always:
+    if not read:
+      return os.system(cmd)
+    else:
+      proc = subprocess.Popen(shlex.split(cmd),stdout=subprocess.PIPE)
+      return proc.stdout.readlines()
+  return 0
+
+cwd = os.getcwd()
+hg = os.getenv('HG')
+remote_view = '%s/views/%s' % (os.getenv('REPOS'), opts.cmdline[0])
+
+def run_hg(cmd,quiet=None,read=None,always=False):
+  cmd = hg+' '+cmd
+  return run_cmd(cmd, quiet, read, always)
+
+def get_sublist(view_path):
+  """get array of subrepos in given view"""
+  cwd = os.getcwd()
+  os.chdir(view_path)
+  hgsub = run_hg('cat -r tip .hgsub', read=True)
+  sublist = []
+  for line in hgsub:
+    m = re.match(r'\s*(\S+)\s*=', line)
+    if m:
+      sub = m.group(1)
+      sublist.append(sub)
+  os.chdir(cwd)
+  return sublist
+
+remote_subs = get_sublist(remote_view)
+local_subs = get_sublist('.')
+for sub in remote_subs:
+  if sub not in local_subs:
+    run_cmd('hg addsub %s' % sub)
+

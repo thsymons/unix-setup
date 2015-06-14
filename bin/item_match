@@ -1,0 +1,42 @@
+#!/bin/env python
+# match key items it selected column
+import sys, time, string, re, os, argparse, subprocess, shlex, fileinput
+
+op = argparse.ArgumentParser(description="""
+Description of script goes here
+""")
+
+op.add_argument('-X',                 help='Show commands, but do not execute',action='store_true')
+op.add_argument('--col',              help='Column number')
+op.add_argument('cmdline',            help='Positional arguments',nargs='*')
+opts = op.parse_args(sys.argv[1:])
+
+def run_cmd(cmd,quiet=None,read=None,always=False):
+  if not quiet:
+    print cmd
+  if not opts.X or always:
+    if not read:
+      return os.system(cmd)
+    else:
+      proc = subprocess.Popen(shlex.split(cmd),stdout=subprocess.PIPE)
+      return proc.stdout.readlines()
+  return 0
+
+hash = {}
+filename = opts.cmdline[0]
+for line in fileinput.input(filename):
+  cols = line.split()
+  if len(cols) > 3:
+    m = re.search(r'(.*)(pcmd_.*_pcmd_.*)', cols[3])
+    if m:
+      hdr = m.group(1)
+      key = m.group(2)
+      if key in hash:
+        del hash[key]
+        print 'Deleted ', key
+      else:
+        hash[key] = hdr
+
+print 'Unmatched items:'
+for key, hdr in hash.iteritems():
+  print hdr, '->', key

@@ -1,0 +1,1 @@
+mark.vba: call delete('/nfs/an/disks/an_home_disk013/thsymons/.vim/autoload/mark.vim')|call delete('/nfs/an/disks/an_home_disk013/thsymons/.vim/plugin/mark.vim')|call delete('/nfs/an/disks/an_home_disk013/thsymons/.vim/doc/mark.txt')

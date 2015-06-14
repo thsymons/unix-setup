@@ -1,0 +1,84 @@
+#!/usr/bin/perl
+# Description
+use Getopt::Std;
+use File::Basename;
+use Data::Dumper;
+use Carp;
+require DynaLoader;
+use Verilog::Getopt;
+use Verilog::Preproc;
+
+sub usage {
+print <<EOF;
+Syntax: $0 -dh 
+-X   : Debug only mode, do not execute
+-h   : Display this help
+EOF
+exit;
+}
+
+#usage unless getopts('Xh');
+#usage if $opt_h;
+
+my %defines;
+my $opt = new Verilog::Getopt;
+@ARGV = $opt->parameter(@ARGV);
+$file = shift @ARGV;
+
+my $vp = MyProc->new(
+      options=>$opt,
+      keep_whitespace=>0,
+      line_directives=>0,
+#      pendantic=>1
+   );
+$vp->open(filename=>$file);
+while (defined ($line = $vp->getline())) {
+   print $line;
+}
+
+foreach $def (keys %defines) {
+   print "$def = $defines{$def}\n";
+}
+
+sub run_cmd {
+   my $cmdline = shift;
+   print "$cmdline\n" if $opt_X;
+   my @cmd = split('\s',$cmdline);
+   my $cmd = shift @cmd;
+   system $cmd, @cmd unless $opt_X;
+   $exit_value = $? >> 8;
+}
+
+package MyProc;
+use Verilog::Getopt;
+use Verilog::Preproc;
+use base qw(Verilog::Preproc);
+
+sub define {
+   my $self = shift;
+   my ($defname, $value, $params) = @_;
+   $defines{$defname} = $value;
+#   print "defined: $defname == $value\n";
+#   return $value;
+   return 1==1;
+}
+
+
+sub def_exists {
+   my $self = shift;
+   my ($defname) = @_;
+
+   print "def_exists: $defname\n";
+   return 1 if exists $defines{$defname};
+   return 0;
+}
+
+sub def_value {
+   my ($self, $defname) = @_;
+   print "def_value: $defname\n";
+   return $defines{$defname};
+}
+
+1;
+
+

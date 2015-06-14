@@ -1,0 +1,16 @@
+#!/usr/bin/perl
+# 'which' vi - edits file from search path 
+# Syntax: wvi filespec
+# scans search path for specified files, then
+# edits them via vi.  Only first occurrence of
+# each file is edited.
+foreach $f (@ARGV) {
+	PATH:
+	foreach $path (split(':',$ENV{'PATH'})) {
+		$file = $path."/".$f;
+		if (-T $file) {
+			system($ENV{'EDITOR'}." ".$path."/".$f);
+			last PATH;
+		}
+	}
+}

@@ -1,0 +1,24 @@
+#!/usr/bin/perl
+# 'which' cat - cats file from search path 
+# Syntax: wcat filespec
+# scans search path for specified files, then
+# writes them to stdout.  Only first occurrence of
+# each file is displayed.
+foreach $f (@ARGV) {
+	PATH:
+	foreach $path (split(':',$ENV{'PATH'})) {
+		$file = $path."/".$f;
+		if (open(FILE,$file)) {
+			if (-T $file) {
+				print "Location: ",$path."/".$f,"\n";
+				while (<FILE>) {
+					print $_;
+				}
+			} else {
+				print $file," (binary)\n";
+			}
+			print "------------------------------\n";
+			last PATH;
+		}
+	}
+}

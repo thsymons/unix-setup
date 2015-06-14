@@ -1,0 +1,50 @@
+#!/usr/bin/perl
+# Description
+use Getopt::Std;
+use File::Basename;
+
+sub usage {
+print <<EOF;
+Syntax: $0 -dh 
+-X   : Debug only mode, do not execute
+-h   : Display this help
+EOF
+exit;
+}
+
+usage unless getopts('Xh');
+usage if $opt_h;
+usage if @ARGV != 1;
+$filename = shift @ARGV;
+
+$perl = get_perl_code($filename);
+eval $perl;
+if ($@) {
+   print "ERROR Parsing $filename:\n";
+   die "$@\n";
+}
+
+# read given file, return as concatenated string that can be executed
+sub get_perl_code {
+   my ($fn) = @_;
+
+   local (*FH);
+   my $perl_code = "";
+
+   open (FH,$fn) || die "Cannot open perl file: $fn\n";
+   while (<FH>) {
+      $perl_code .= $_;
+   }
+   close FH;
+   $perl_code;
+}
+
+sub run_cmd {
+   my $cmdline = shift;
+   print "$cmdline\n" if $opt_X;
+   my @cmd = split('\s',$cmdline);
+   my $cmd = shift @cmd;
+   system $cmd, @cmd unless $opt_X;
+   $exit_value = $? >> 8;
+}
+

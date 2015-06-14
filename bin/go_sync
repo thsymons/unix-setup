@@ -1,0 +1,42 @@
+#!/bin/env python
+# Syncs files from remote host to local host
+import sys, time, string, re, os, argparse, subprocess, shlex, fileinput
+
+op = argparse.ArgumentParser(description="""
+Description of script goes here
+""")
+
+op.add_argument('-X',                 help='Show commands, but do not execute',action='store_true')
+op.add_argument('cmdline',            help='Positional arguments',nargs='*')
+opts = op.parse_args(sys.argv[1:])
+
+def run_cmd(cmd,quiet=False,read=None,always=False):
+  if not quiet:
+    print cmd
+  if not opts.X or always:
+    if not read:
+      return os.system(cmd)
+    else:
+      proc = subprocess.Popen(shlex.split(cmd),stdout=subprocess.PIPE)
+      return proc.stdout.readlines()
+  return 0
+
+host = 'gato'
+sync_file = '/import/sync.list'
+
+# target can be file or directory
+if os.path.exists(sync_file):
+  for line in fileinput.input(sync_file):
+    line = line.rstrip()
+    if re.match(r'^\s*$', line): # skip blank lines
+      continue
+    if re.match(r'^\s*#', line): # skip comment lines
+      continue
+    src = string.Template(line).substitute(os.environ)
+    for target in src.split(':'):# for lists like LM_LICENSE_FILE
+      head = os.path.dirname(target)
+      run_cmd('mkdir -p %s' % head, quiet=True)
+      cmd = 'rsync -avz -e ssh %s:%s %s' % (host, target, head)
+      run_cmd(cmd)
+	
+

@@ -1,0 +1,3 @@
+#!/bin/csh
+cp ~/bin/shell.perl $1
+gvim $1

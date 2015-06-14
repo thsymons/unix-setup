@@ -1,0 +1,131 @@
+#!/usr/bin/perl
+# Scan given IP release area, searching only latest QC's or IC's
+use Getopt::Long;
+use File::Basename;
+Getopt::Long::config(qw(no_bundling auto_abbrev no_ignore_case));
+
+sub usage {
+print <<EOF;
+Syntax: $0 -dhIQ [-f file-string] [-g grep-string] root-of-release-area 
+-qc      : Search QC's
+-ic      : Search IC's (default)
+-f s     : Search for files with given string in name
+-g s     : Search for files with given string in body
+-ip s    : Give list of ip area(s) to search, separated by commas
+           Optionally follow each ip area with /BBB, where BBB is desired branch nam - restricts search to that branch
+-skip s  : List of ip area(s) to skip, separated by commas
+-no      : Print filenames only, instead of all matching lines in each file (for -g option only)
+-X       : Debug only mode, do not execute
+-dbg     : Display debug messages while executing
+-h       : Display this help
+EOF
+exit;
+}
+
+usage unless &GetOptions(\%opts,
+      "dbg",
+      "f=s","g=s","ip=s","no",
+      "qc","ic","skip=s",
+      "help",
+      "X",
+      );
+usage if $opts{h};
+usage if @ARGV != 1;
+$root = shift @ARGV;
+$opts{ic} = 1 unless exists $opts{qc};
+$opt_l = "-l" if exists $opts{no};
+die "Must select -f or -g option\n" unless (exists $opts{f} || exists $opts{g});
+
+if (exists $opts{ip}) {
+   @ip_list = split(',',$opts{ip});
+} else {
+   opendir(DIR,$root) || die "Cannot open root directory $root - aborting\n";
+   @ip_list = readdir(DIR);
+}
+foreach (split(',',$opts{skip})) {
+   $skip_list{$_} = 1;
+}
+
+foreach (@ip_list) {
+   next if /^\./;
+   next if exists $skip_list{$_};
+   $ip = $_; $branch = "";
+   ($ip,$branch) = split(/\//) if /\//;
+   chdir $root;
+   next unless -d $ip;
+   process_ip_area($ip,$branch);
+}
+
+sub process_ip_area {
+   my ($ip,$branch) = @_;
+   my $ic,$qc;
+   local *DIR;
+   my @branch_list;
+
+   if (-d "$ip/release") {
+      chdir "$ip/release";
+      if ($branch eq "") {
+         @branch_list = readdir(DIR) if (opendir(DIR,"."));
+      } else {
+         push @branch_list,$branch;
+      }
+      foreach $branch (@branch_list) {
+         next if $branch =~ /^(adam|\.)/;
+         get_latest($ip,$branch,\$ic,\$qc);
+         search_xc($ip,$branch,$ic) if $opts{ic};
+         search_xc($ip,$branch,$qc) if $opts{qc};
+      }
+   }
+}
+
+# Search given IC/QC, using user's search criteria
+sub search_xc {
+   my ($ip,$branch,$xc) = @_;
+   print "Searching $ip $branch $xc...\n";
+   print `pwd` if exists $opts{dbg};
+   if (exists $opts{f}) {
+      my $cmd = "find $branch/$xc -type f -follow -print|";
+      print "CMD: $cmd\n" if exists $opts{dbg};
+      if (open(CMD,$cmd)) {
+         while (<CMD>) {
+               print "$ip: $_"if /$opts{f}/i;
+         }
+      }
+   } elsif (exists $opts{g}) {
+      my $cmd = "grep -r $opt_l $opts{g} $branch/$xc";
+      run_cmd($cmd);
+   }
+    
+}
+
+sub get_latest {
+   my ($ip,$branch,$ic,$qc) = @_;
+   my @dir_list;
+
+   $$ic = ""; $$qc = "";
+   get_sorted_directories($branch,\@dir_list);
+   foreach $dir (@dir_list) {
+      next if $dir =~ /^\.|^CurQual|^prod/;
+      $$ic = $dir if $dir =~ /^I/;
+      $$qc = $dir if $dir =~ /^Q/;
+   }
+}
+
+# get_sorted_directories(dir_name,\@dir_list);
+sub get_sorted_directories {
+   my ($dir_name,$dir_list) = @_;
+   local *DIR;
+
+   opendir(DIR, $dir_name);
+   my @dir_list = readdir(DIR);
+   closedir(DIR);
+   @$dir_list = sort(@dir_list);
+}
+
+sub run_cmd {
+   my $cmdline = shift;
+   print "$cmdline\n" if $opts{X};
+   system $cmdline unless $opts{X};
+   $exit_value = $? >> 8;
+}
+

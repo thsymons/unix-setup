@@ -1,0 +1,10 @@
+let g:netrw_dirhistmax  =10
+let g:netrw_dirhist_cnt =8
+let g:netrw_dirhist_1='/import/rapid-dev8/tsymons/dbcore/env/dbcore/tb/builds'
+let g:netrw_dirhist_2='/import/rapid-dev8/tsymons/dbcore/models/dbcore_isg/src/framework/branch_eval'
+let g:netrw_dirhist_3='/import/rapid-dev8/tsymons/isg/models/dbcore_isg/src/framework/branch_eval'
+let g:netrw_dirhist_4='/import/rapid-dev8/tsymons/new_vcs/dbcore/env/dbcore/tb/builds'
+let g:netrw_dirhist_5='/import/rapid-dev8/tsymons/dpu-merge/models/vl/src/uvc_lib'
+let g:netrw_dirhist_6='/import/rapid-dev8/tsymons/dpu4/models/memory_box'
+let g:netrw_dirhist_7='/import/rapid-dev8/tsymons/dpu4/models/memory_box/src'
+let g:netrw_dirhist_8='/import/rapid-dev8/tsymons/dpu5/common/dv/src'

@@ -1,0 +1,80 @@
+if filereadable('$RELsocace/tng/ace_cleanup.pp')
+   badd $RELsocace/tng/ace_cleanup.pp
+else
+   badd $REL/$RELsocace/tng/ace_cleanup.pp
+endif
+if filereadable('$RELsocace/tng/mm')
+   badd $RELsocace/tng/mm
+else
+   badd $REL/$RELsocace/tng/mm
+endif
+if filereadable('$RELsocace/tng/pssa_integ.udf')
+   badd $RELsocace/tng/pssa_integ.udf
+else
+   badd $REL/$RELsocace/tng/pssa_integ.udf
+endif
+if filereadable('$RELsocace/tng/sc')
+   badd $RELsocace/tng/sc
+else
+   badd $REL/$RELsocace/tng/sc
+endif
+if filereadable('$RELsocace/tng/tng.acerc')
+   badd $RELsocace/tng/tng.acerc
+else
+   badd $REL/$RELsocace/tng/tng.acerc
+endif
+if filereadable('$RELsocace/tng/tng.env')
+   badd $RELsocace/tng/tng.env
+else
+   badd $REL/$RELsocace/tng/tng.env
+endif
+if filereadable('$RELsocace/tng/tng.pp')
+   badd $RELsocace/tng/tng.pp
+else
+   badd $REL/$RELsocace/tng/tng.pp
+endif
+if filereadable('$RELsocace/tng/tng.udf')
+   badd $RELsocace/tng/tng.udf
+else
+   badd $REL/$RELsocace/tng/tng.udf
+endif
+if filereadable('$RELsocace/tng/tng.udf.orig')
+   badd $RELsocace/tng/tng.udf.orig
+else
+   badd $REL/$RELsocace/tng/tng.udf.orig
+endif
+if filereadable('$RELsocace/common/ivars.udf')
+   badd $RELsocace/common/ivars.udf
+else
+   badd $REL/$RELsocace/common/ivars.udf
+endif
+if filereadable('$RELsocace/common/tools.env')
+   badd $RELsocace/common/tools.env
+else
+   badd $REL/$RELsocace/common/tools.env
+endif
+if filereadable('$RELsocace/lib/IP_Config.pm')
+   badd $RELsocace/lib/IP_Config.pm
+else
+   badd $REL/$RELsocace/lib/IP_Config.pm
+endif
+if filereadable('$RELsocace/lib/tng/VCS_simulate.pm')
+   badd $RELsocace/lib/tng/VCS_simulate.pm
+else
+   badd $REL/$RELsocace/lib/tng/VCS_simulate.pm
+endif
+if filereadable('$RELsocace/lib/tng/RunModes.pm')
+   badd $RELsocace/lib/tng/RunModes.pm
+else
+   badd $REL/$RELsocace/lib/tng/RunModes.pm
+endif
+if filereadable('$RELsocace/lib/tng/TestBuilder.pm')
+   badd $RELsocace/lib/tng/TestBuilder.pm
+else
+   badd $REL/$RELsocace/lib/tng/TestBuilder.pm
+endif
+if filereadable('$RELsocace/lib/tng/Compile.pm')
+   badd $RELsocace/lib/tng/Compile.pm
+else
+   badd $REL/$RELsocace/lib/tng/Compile.pm
+endif

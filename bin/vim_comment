@@ -1,0 +1,18 @@
+#!/usr/bin/perl
+# Add // style comments to selectd lines
+# Remove /* style comments if found
+# Call from VIM by highlighting lines,
+# then type !vim_align
+while (<>) {
+  chomp;
+  next if /^\s*\/\*\s*$/;# '/*' only on line
+  next if /^\s*\*\/\s*$/;# '*/' only on line
+  next if /\/\//;# already single line comment
+  if (/\/\*/) {
+    s/\/\*/\/\//;
+  } else {
+    s/^\s*/  \/\/ /;
+    s/\*\///;
+  }
+  print "$_\n";
+}

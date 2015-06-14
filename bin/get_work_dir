@@ -1,0 +1,20 @@
+#!/bin/csh -f
+# Finds selected or current work area
+
+if ($#argv) then
+  cd $WORK/$argv[1]
+else
+  while (1)
+    if (-f .gox || -f .gosim) then
+      break
+    else
+      set p = `pwd`
+      if ("$p" != "/") then
+        cd ..
+      else
+        cd $DV_ROOT
+      endif 
+    endif
+  end
+endif
+pwd

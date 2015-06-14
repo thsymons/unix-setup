@@ -1,0 +1,125 @@
+#!/bin/env python
+# Convert an Hg repo to Git
+# Source Hg repo will be modified (updates to different versions)
+import sys, time, string, re, os, argparse, subprocess, shlex, fileinput
+
+op = argparse.ArgumentParser(description="""
+Convert an Hg repo to Git
+syntax: hg2git hg-repo [git-repo]
+
+git-repo should be a relative path from current directory.
+""")
+
+op.add_argument('--view',             help='Copy entire view (hg-repo is a view)', action='store_true')
+op.add_argument('-X',                 help='Show commands, but do not execute',action='store_true')
+op.add_argument('cmdline',            help='Positional arguments',nargs='*')
+opts = op.parse_args(sys.argv[1:])
+
+hg = os.environ['HG']
+
+def run_cmd(cmd,quiet=False,read=None,always=False):
+  if not quiet:
+    print cmd
+  if not opts.X or always:
+    if not read:
+      return os.system(cmd)
+    else:
+      proc = subprocess.Popen(shlex.split(cmd),stdout=subprocess.PIPE)
+      return proc.stdout.readlines()
+  return 0
+
+def run_hg(cmd, quiet=None, read=None, always=False):
+  cmd = hg + ' ' + cmd
+  return run_cmd(cmd, quiet, read, always)
+
+if len(opts.cmdline) < 1:
+  op.print_help()
+  sys.exit()
+
+cwd = os.getcwd()
+hg_repo = opts.cmdline[0]
+git_repo = cwd
+if len(opts.cmdline) > 1:
+  git_repo = opts.cmdline[1]
+
+def get_commit_info(rev):
+  author = None; date = None; summary = ''
+  lines = run_hg('log --rev %s' % rev, read=True, always=True)
+  for line in lines:
+    m = re.match(r'(\S+):\s+(.*)$', line)
+    if m:
+      if m.group(1) == 'user':
+        author = m.group(2)
+      elif m.group(1) == 'date':
+        date = m.group(2)
+      elif m.group(1) == 'summary':
+        summary = m.group(2)
+  return (author, date, summary)
+
+def copy_repo(src, tgt=None):
+  global cwd
+  orig_tgt = tgt
+  if not re.match(r'\/', src):
+    src = os.path.normpath('%s/%s' % (cwd, src))
+  if not re.match(r'\/', tgt):
+    tgt = os.path.normpath('%s/%s' % (cwd, tgt))
+  print "Copying Hg Repo '%s' to Git Repo: '%s'" % (src, tgt)
+  os.chdir(src)
+  revs = run_hg("log --template '{node}\\n'", read=True, always=True)
+  run_cmd('mkdir -p %s' % tgt, always=True)
+  revs.reverse()
+  for rev in revs:
+    rev = rev.rstrip()
+    run_hg('update -C -r %s' % rev)
+    (author, date, summary) = get_commit_info(rev)
+    files = run_hg('status --change %s' % rev, read=True, always=True)
+    rmlist = []
+    for file in files:
+      stat = file.split()
+      dir = os.path.dirname(stat[1])
+      #print 'file=%s   dir=%s' % (stat[1], dir)
+      tgt_dir = '%s/%s' % (tgt, dir)
+      if not os.path.exists(tgt_dir):
+        run_cmd('mkdir -p %s' % tgt_dir)
+      if stat[0] == 'R':
+        rmlist.append(stat[1])
+      else:
+        run_cmd('cp %s/%s %s/%s' % (src, stat[1], tgt, stat[1]))
+    os.chdir(tgt)
+    print 'Executing from ',tgt
+    print 'Posting rev %s <<<<' % rev
+    for file in rmlist:
+      run_cmd('git rm %s' % file)
+    run_cmd('git add --all')
+    cmd = "git commit"
+    if author is not None:
+      cmd += " --author=%s" % author
+    #if date is not None:
+    #  cmd += " --date=%s" % date # todo: need to verify date format
+    cmd += " -m '%s\\nadded repo=%s, hg rev=%s'" % (summary, orig_tgt, rev)
+    run_cmd(cmd)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.chdir(src)
+
+def get_repo_list(view):
+  list = []
+  hgsub = '%s/.hgsub' % view
+  if not os.path.exists(hgsub):
+    sys.exit('Cannot find .hgsub in %s' % view)
+  for line in fileinput.input(hgsub):
+    repo = line.split()[0]
+    list.append(repo)
+  return list
+
+print "Copying Hg Repo '%s' to Git Repo: '%s'" % (hg_repo, git_repo)
+
+if opts.view:
+  repos = get_repo_list(hg_repo)
+  for repo in repos:
+    src_repo = '%s/%s' % (hg_repo, repo)
+    tgt_repo = '%s/%s' % (git_repo, repo)
+    copy_repo(src_repo, tgt_repo)
+else:
+  copy_repo(hg_repo, git_repo)
+

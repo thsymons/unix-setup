@@ -1,0 +1,60 @@
+#!/usr/bin/perl
+# Align assignments in VIM file
+# Call from VIM by highlighting lines,
+# then type !vim_align
+# Will align =, <= and (
+# Aligns ( only if line has format of Verilog netlist - .xxx(...
+$max = 0;
+while (<>) {
+    chomp;
+    $lhs = $_; $token = ""; $rhs = "";
+    if (/<=/) {
+        $lhs = rtrim($`); $rhs = trim($'); $token = "<= ";
+        update_max($lhs);
+    } elsif (/=/) {
+        $lhs = rtrim($`); $rhs = trim($'); $token = "= ";
+        update_max($lhs);
+    } elsif (/^\s*\.\w+\s*\(/) {
+        $lhs = rtrim($&); chop($lhs);
+        $rhs = trim($'); $token = "(";
+        update_max($lhs);
+    } else {
+        $lhs = $_;
+    }
+    push(@left,$lhs);
+    push(@token,$token);
+    push(@right,$rhs);
+}
+$offset = $max % 4;
+$offset = 4 - $offset if $offset > 0;
+$max += $offset;
+foreach $lhs (@left) {
+    $token = shift(@token);
+    $rhs = shift(@right);
+    if ($token ne "") {
+        $pad_len = $max - length($lhs);
+        $pad = " " x $pad_len;
+        print "$lhs$pad$token$rhs\n";
+    } else {
+        print "$lhs\n";
+    }
+}
+
+sub update_max {
+    my $str = $_[0];
+    my $len = length($lhs);
+    $max = $len if $len > $max;
+}
+
+sub trim {
+  my $str = shift;
+  $str =~ s/^\s*//;
+  $str =~ s/\s*$//;
+  return $str;
+}
+
+sub rtrim {
+  my $str = shift;
+  $str =~ s/\s*$//;
+  return $str;
+}

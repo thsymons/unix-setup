@@ -1,0 +1,128 @@
+#!/bin/env python
+# Diff two files by removing duplicate lines from both
+import sys, time, string, re, os, argparse, subprocess, shlex, fileinput
+
+op = argparse.ArgumentParser(description="""
+Syntax: show_diff [options] file1 file2
+""")
+
+op.add_argument('--split',            help='Split lines by spaces', action='store_true')
+op.add_argument('--tkdiff',           help='Launch tkdiff to show final differences', action='store_true')
+op.add_argument('-X',                 help='Show commands, but do not execute',action='store_true')
+op.add_argument('cmdline',            help='Positional arguments',nargs='*')
+opts = op.parse_args(sys.argv[1:])
+
+def run_cmd(cmd,quiet=None,read=None,always=False):
+  if not quiet:
+    print cmd
+  if not opts.X or always:
+    if not read:
+      return os.system(cmd)
+    else:
+      proc = subprocess.Popen(shlex.split(cmd),stdout=subprocess.PIPE)
+      return proc.stdout.readlines()
+  return 0
+
+if len(opts.cmdline) < 2:
+  op.print_help()
+  sys.exit()
+
+file1 = opts.cmdline[0]
+file2 = opts.cmdline[1]
+file1_lines = []
+file2_lines = []
+
+hash1 = {}
+hash2 = {}
+deleted = []
+
+for line in fileinput.input(file1):
+  line = line.rstrip()
+  if opts.split:
+    splits = line.split()
+    for s in splits:
+      file1_lines.append(s)
+      if s in hash1:
+        hash1[s] += 1
+      else:
+        hash1[s] = 1
+  else:
+    file1_lines.append(line)
+    if line in hash1:
+      hash1[line] += 1
+    else:
+      hash1[line] = 1
+fileinput.close()
+
+for line in fileinput.input(file2):
+  line = line.rstrip()
+  if opts.split:
+    splits = line.split()
+    for s in splits:
+      file2_lines.append(s)
+      if s in hash2:
+        hash2[s] += 1
+      else:
+        hash2[s] = 1
+  else:
+    file2_lines.append(line)
+    if line in hash2:
+      hash2[line] += 1
+    else:
+      hash2[line] = 1
+fileinput.close()
+
+fh = open(file1+'.sort', 'w')
+fh.writelines(sorted(file1_lines))
+fh.close()
+fh = open(file2+'.sort', 'w')
+fh.writelines(sorted(file2_lines))
+fh.close()
+
+#print 'hash1: ', hash1
+#print 'hash2: ', hash2
+
+file1_unique = []
+out1 = file1+'.orig'
+fh = open(out1, 'w')
+for line in file1_lines:
+  if line in hash2:
+    hash2[line] -= 1
+    if hash2[line] == 0:
+      del hash2[line]
+  else:
+    file1_unique.append(line)
+  fh.write(line+'\n')
+fh.close()
+
+file2_unique = []
+out2 = file2+'.orig'
+fh = open(out2, 'w')
+for line in file2_lines:
+  if line in hash1:
+    hash1[line] -= 1
+    if hash1[line] == 0:
+      del hash1[line]
+  else:
+    file2_unique.append(line)
+  fh.write(line+'\n')
+fh.close()
+
+out1 = file1+'.out'
+fh = open(out1, 'w')
+for line in file1_unique:
+  fh.write(line+'\n')
+fh.close()
+
+out2 = file2+'.out'
+fh = open(out2, 'w')
+for line in file2_unique:
+  fh.write(line+'\n')
+fh.close()
+
+print 'Unique lines of %s (%d) written to %s (%d)' % (file1, len(file1_lines), out1, len(file1_unique))
+print 'Unique lines of %s (%d) written to %s (%d)' % (file2, len(file2_lines), out2, len(file2_unique))
+print 'Split originals written to %s.orig/sort and %s.orig/sort' % (file1, file2)
+
+if opts.tkdiff:
+  run_cmd('tkdiff %s %s' % (out1, out2))

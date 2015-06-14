@@ -1,0 +1,2 @@
+call s:MatchRegex('HiliteGroup0', 'func')
+call s:MatchRegex('HiliteGroup1', 'score')

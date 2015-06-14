@@ -1,0 +1,6 @@
+#!/bin/csh
+# Description
+
+set a = `pwd`
+echo "$a" > ~/show_pwd.txt
+

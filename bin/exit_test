@@ -1,0 +1,7 @@
+#!/bin/csh -f
+# Description
+
+echo $argv[1-]
+$argv[1-]
+set xstat = $status
+echo "Exit status was $xstat"

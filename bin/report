@@ -1,0 +1,41 @@
+#!/bin/env python
+# Query regression database for given testname.
+import sys, time, string, re, os, argparse, subprocess, shlex
+
+op = argparse.ArgumentParser(description="""
+Query regression database for given testname.
+Report info on each run, over time
+syntax: job_perf_history testname
+""")
+
+op.add_argument('--sort',             help='Sort column (cps, cycles)')
+op.add_argument('-X',                 help='Show commands, but do not execute',action='store_true')
+op.add_argument('cmdline',            help='Positional arguments',nargs='*')
+opts = op.parse_args(sys.argv[1:])
+
+def run_cmd(cmd,quiet=None,read=None,always=False):
+  if not quiet:
+    print cmd
+  if not opts.X or always:
+    if not read:
+      return os.system(cmd)
+    else:
+      proc = subprocess.Popen(shlex.split(cmd),stdout=subprocess.PIPE)
+      return proc.stdout.readlines()
+  return 0
+
+if len(opts.cmdline) < 1:
+  op.print_help()
+  sys.exit()
+
+regress = opts.cmdline[0]
+cols = "testname, cycles, cps, backend, pass, time"
+select = 'WHERE dv_root LIKE \"%' + regress + '%\"'
+sort = "time"
+if opts.sort:
+  sort = opts.sort
+select = 'SELECT %s FROM rpdSimDataV0_3 %s ORDER BY %s LIMIT 100' % (cols, select, sort)
+
+
+cmd = "mysql --host=guy -u mt -p --port=3306 -e '%s' rapid_aus" % select
+run_cmd(cmd)

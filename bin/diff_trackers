@@ -1,0 +1,55 @@
+#!/bin/env python
+# Finds and optionally deletes broken symbolic links
+import sys, time, string, re, os, argparse, subprocess, shlex
+
+op = argparse.ArgumentParser(description="""
+Description of script goes here
+""")
+
+op.add_argument('-X',                 help='Show commands, but do not execute',action='store_true')
+op.add_argument('cmdline',            help='Positional arguments',nargs='*')
+opts = op.parse_args(sys.argv[1:])
+
+def run_cmd(cmd,quiet=None,read=None,always=False):
+  if not quiet:
+    print cmd
+  if not opts.X or always:
+    if not read:
+      return os.system(cmd)
+    else:
+      proc = subprocess.Popen(shlex.split(cmd),stdout=subprocess.PIPE)
+      return proc.stdout.readlines()
+  return 0
+
+if len(opts.cmdline) < 2:
+  op.print_help()
+  sys.exit()
+
+file1 = opts.cmdline[0]
+file2 = opts.cmdline[1]
+
+
+fh1 = open(file1, "r")
+fh2 = open(file2, "r")
+
+lines1 = fh1.readlines()
+lines2 = fh2.readlines()
+
+for line1 in lines1:
+  print line1.rstrip(),
+  s1 = line1.split()
+  if len(lines2) > 0:
+    line2 = lines2.pop(0)
+    s2 = line2.split()
+    if (s1[6] != s2[6]):
+      print ' <-- %s (%s)' % (line2.rstrip(), s2[6]),
+    else:
+      print ' <-- (%s)' % s2[6]
+  else:
+    print
+  
+
+
+
+
+

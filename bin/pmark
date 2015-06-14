@@ -1,0 +1,85 @@
+#!/bin/csh -f
+#
+# pmark - mark the current directory persistently for 'cd'ing back.
+#    Written by:  Bruce Israel <israel@tux.org>, Sat Oct 27 2001
+#
+# To enable, setup in .cshrc: set cdpath = ( . ~/.dirs)
+#
+set usage = "pmark "
+#
+#    sets up a persistent mark  pointing to the cur dir.
+#
+# persistent marks are stored in ~/.dirs
+
+set storage = ~/.dirs
+
+# set to use relative directories from $HOME (this means that the
+# home directory can be tarred up, preserving persistent marks).
+set use_relative = 1
+
+# Check to see if the persistent mark cache directory exists, and create it
+# if needed.
+if (! -d $storage) then
+    echo -n "Directory repository $storage doesn't exist, create it? "
+    set ans = "$<"
+    if ("$ans" == "y" || "$ans" == "Y" || "$ans" == "") then
+        echo mkdir -p $storage
+        mkdir -p $storage
+    else
+        exit 1
+    endif
+endif
+
+# if no parameter passed, generate usage line and list available pmarks
+if ("$1" == "") then
+    echo "Usage: $usage"
+    echo "Current pmarks are:"
+    cd $storage
+    foreach itm ( * )
+        if (! -d $itm) echo -n "(non-existent) "
+        /bin/ls -ld $itm | awk '{print $9,$10,$11}'
+    end
+    exit 1
+endif
+
+# for security, change spaces and slashes to at-signs
+# (Otherwise someone could do "pmark /etc/passwd")
+set name = "`echo "'"'"$1"'"'" | tr ' /' '@'`"
+
+set dir = "`pwd`"
+
+set fulldir = "$dir"
+
+# if the directory is underneath $HOME, then use a relative
+# directory instead, e.g. instead of X -> /home/israel/src,
+# X will be linked to ../src.
+
+if ($use_relative == 1 && "$dir" =~ ${HOME}/*) then
+
+    # Convert directory to be marked to relative directories
+    cd ${HOME}
+    set hname = "`pwd`"
+
+    cd $storage
+
+    set href = ""
+
+    # walk dirs up to $HOME to generate relative link from repository 
+    while ("`pwd`" != "${hname}")
+        set href = "../${href}"
+        cd ..
+    end
+
+    # substitute relative link for $HOME in directory reference
+    set ndir = "`echo $dir | sed -e 's%${home}/%${href}%'`"
+    set dir = "$ndir"
+endif
+
+# go to repository storage, remove the old version of this mark (if
+# it exists, and create new link.
+cd $storage
+rm -f $name
+ln -s "$dir" $name
+
+echo "mark $name => $fulldir created."
+

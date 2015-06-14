@@ -1,0 +1,20 @@
+if filereadable('platformplatform.c')
+   badd platformplatform.c
+else
+   badd $REL/platformplatform.c
+endif
+if filereadable('dmacModel.c')
+   badd dmacModel.c
+else
+   badd $REL/dmacModel.c
+endif
+if filereadable('dmacModel.stubs.c')
+   badd dmacModel.stubs.c
+else
+   badd $REL/dmacModel.stubs.c
+endif
+if filereadable('applicationdmaTest.c')
+   badd applicationdmaTest.c
+else
+   badd $REL/applicationdmaTest.c
+endif

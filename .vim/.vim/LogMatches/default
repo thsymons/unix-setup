@@ -1,0 +1,6 @@
+call LogMatch#MatchRegex('HiliteGroup0', 'master')
+call LogMatch#MatchRegex('HiliteGroup1', 'slave')
+call LogMatch#MatchRegex('HiliteGroup3', 'cover')
+call LogMatch#MatchRegex('HiliteGroup4', 'score')
+let s:currentMatchIndex = 2
+call LogMatch#SetPrimaryMatch()

@@ -1,0 +1,8 @@
+#!/usr/bin/perl
+# Verilog netlister for VIM
+# Replaces xxx on each line with .xxx(xxx),
+while (<>) {
+    s/(\w+)/.\1(\1),/;
+    print;
+}
+

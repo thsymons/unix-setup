@@ -1,0 +1,6 @@
+#!/bin/csh -f
+# Description
+
+
+drmon project=rapid type=OS_TESTING $argv[1-]
+

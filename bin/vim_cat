@@ -1,0 +1,8 @@
+#!/usr/bin/perl
+# Cat out selected text to cat.txt file in home directory
+my $filename = "$ENV{HOME}/cat.txt";
+open FH, ">$filename" || die "Cannot open $filename\n";
+while (<>) {
+   print FH ;
+}
+close FH;

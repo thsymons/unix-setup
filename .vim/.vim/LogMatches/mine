@@ -1,0 +1,4 @@
+call LogMatch#MatchRegex('HiliteGroup0', 'agent\>')
+call LogMatch#MatchRegex('HiliteGroup1', '\<score')
+let s:currentMatchIndex = 1
+call LogMatch#SetPrimaryMatch()

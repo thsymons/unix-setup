@@ -1,0 +1,52 @@
+#!/bin/env python
+# Finds and optionally deletes broken symbolic links
+import sys, time, string, re, os, argparse, subprocess, shlex
+
+op = argparse.ArgumentParser(description="""
+Syntax: bisect_test sha1 [sha1 sha1 ...]
+Returns 1 if one of given sha1s is current commit-id, else returns 0
+Useful for testing git bisect command.
+""")
+
+op.add_argument('-X',                 help='Show commands, but do not execute',action='store_true')
+op.add_argument('--good',             help='Flip return values - given shas will return 0',action='store_true')
+op.add_argument('cmdline',            help='Positional arguments',nargs='*')
+opts = op.parse_args(sys.argv[1:])
+
+def run_cmd(cmd,quiet=None,read=None,always=False):
+  if not quiet:
+    print cmd
+  if not opts.X or always:
+    if not read:
+      return os.system(cmd)
+    else:
+      proc = subprocess.Popen(shlex.split(cmd),stdout=subprocess.PIPE)
+      return proc.stdout.readlines()
+  return 0
+
+if len(opts.cmdline) < 1:
+  op.print_help()
+  sys.exit()
+
+sha1_list = list(opts.cmdline)
+commit = ''
+result = 0
+if opts.good: result = 1
+done = False
+lines = run_cmd('git show --summary', read=True)
+for line in lines:
+  m = re.match(r'commit\s+(\S+)', line)
+  if m:
+    commit = m.group(1)
+    for sha1 in sha1_list:
+      if re.match(r'%s' % sha1, commit):
+        result = 1
+        if opts.good: result = 0
+        print 'Current sha1 %s matches %s' % (commit, sha1)
+        done = True
+        break
+    if done:
+      break
+
+sys.exit(result)
+

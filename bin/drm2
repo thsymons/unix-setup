@@ -1,0 +1,118 @@
+#!/usr/bin/perl
+# Deferred rm
+use Getopt::Std;
+use File::Basename;
+use Time::Local;
+
+sub usage {
+print <<EOF;
+Syntax: $0 -Xh filespec 
+-t h : Give time to delete, in military time, hour only
+       e.g. 2=2AM, 14=2PM, 12=noon
+-s s : Give time to delete, in seconds from now
+-d   : Debug mode, display commands as they are executed
+-X   : Debug only mode, do not execute
+-h   : Display this help
+EOF
+exit;
+}
+
+usage unless getopts('frs:t:dXh');
+usage if $opt_h;
+
+my $dtime = 2;# time to delete, defaults to 2AM
+$dtime = $opt_t if $opt_t;
+my $dtime_save = $dtime;
+if ($dtime < 12) {
+   $dtime += 12;# add twelve now so adding 12 again gets us where we want
+} else {
+   $dtime -= 12;
+}
+($sec,$min,$hour,$mday,$mon,$year) = localtime;
+#print "hour=$hour, mday=$mday mon=$mon\n";
+my $xtime = timelocal(0,0,$dtime,$mday,$mon,$year);
+$xtime += 12 * 60 * 60;# add 12 hours to 2PM today to get 2AM tomorrow
+my $time = time();
+$seconds = $xtime - $time;
+$seconds += 24 * 60 * 60 if ($seconds < 0);# in case selected time before now
+$seconds = $opt_s if $opt_s;
+#print "Time: dtime=$dtime time=$time xtime=$xtime seconds=$seconds\n";
+
+my $pid = $$;
+my $rand = int rand(0x7fff);
+my $del_dir = ".drm_${pid}_${rand}";
+my $newf;
+my $cwd = `pwd`; chomp($cwd);
+my @del_list;
+run_cmd("mkdir $del_dir");
+push @del_list,$del_dir;
+foreach $f (@ARGV) {
+   $d = check4links($f);
+   if (-l $d) {
+      if ($d eq $f) {
+         run_cmd("rm $f");# it's just a link, delete it now
+      } else {
+         chdir $d;
+         unless (-e $del_dir) {
+            run_cmd("mkdir $del_dir");
+            push @del_list,"$d/$del_dir";
+         }
+         print "In $d: mv $newf $del_dir\n";
+         run_cmd("mv $newf $del_dir");
+         chdir $cwd;
+      }
+   } else {
+      run_cmd("mv $f $del_dir");
+   }
+}
+printf "Will delete $del_dir at %02d:00...\n", $dtime_save;
+fork and exit;
+setpgrp 0,0;
+run_cmd("sleep $seconds");
+$time = localtime();
+print "$time - Deferred rm now executing...\n";
+foreach $d (@del_list) {
+   print "Deleting $d...\n";
+   run_cmd("rm -fr $d");
+}
+
+# See if part of path is a link, return just that portion
+# and leave $newf to contain trailing portion
+sub check4links {
+   my $path = shift;
+   my $newp = "";
+   $newf = "";
+   my $lfound = 0;
+   @dirs = split(/\//,$path);
+   foreach $d (@dirs) {
+      if ($lfound == 0) {
+         $newp .= "/" if $newp ne "";
+         $newp .= $d;
+         $lfound = 1 if -l $newp;
+      } else {
+         $newf .= "/" if $newf ne "";
+         $newf .= $d;
+      }
+   }
+   print "Final: $newp ($newf)\n";
+   $newp;
+}
+
+sub run_cmd {
+   my $cmdline = shift;
+   print "$cmdline\n" if ($opt_X || $opt_d);
+   my @cmd = split('\s',$cmdline);
+   my $cmd = shift @cmd;
+   system $cmd, @cmd unless $opt_X;
+   $exit_value = $? >> 8;
+}
+
+sub format_time {
+   my $seconds = $_[0];
+   my ($hour,$min,$sec,$time);
+   $hour = int($seconds / 3600);
+   $min = int(($seconds % 3600) / 60);
+   $sec = $seconds % 60;
+   $time = sprintf("%02d:%02d:%02d",$hour,$min,$sec);
+}
+

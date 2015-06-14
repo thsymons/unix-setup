@@ -1,0 +1,44 @@
+#!/usr/bin/perl
+# Converto dos files to unix files in-place
+use Getopt::Std;
+use File::Basename;
+
+sub usage {
+print <<EOF;
+Syntax: $0 -dh 
+-X   : Debug only mode, do not execute
+-h   : Display this help
+EOF
+exit;
+}
+
+usage unless getopts('Xh');
+usage if $opt_h;
+
+my @file_list = @ARGV;
+foreach $f (@file_list) {
+   convert($f);
+}
+
+sub convert {
+   my $filename = shift;
+
+   print "Converting: $filename...\n";
+   $^I = "";
+   @ARGV = ($filename);
+   while (<>) {
+      s/\r$//;
+      print;
+   }
+   undef $^I;
+}
+
+sub run_cmd {
+   my $cmdline = shift;
+   print "$cmdline\n" if $opt_X;
+   my @cmd = split('\s',$cmdline);
+   my $cmd = shift @cmd;
+   system $cmd, @cmd unless $opt_X;
+   $exit_value = $? >> 8;
+}
+
