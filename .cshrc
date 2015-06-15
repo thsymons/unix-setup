@@ -8,7 +8,7 @@ setenv PATH ${PATH}:${VCS_HOME}/bin
 setenv PATH /tools/synopsys/scl/linux64/bin:$PATH
 setenv REPOS ssh://gato.us.oracle.com/import/rapid/repos
 alias h history
-alias go_mount 'sshfs gato:/import /export'
+alias go_mount 'sshfs gato:/import /import'
 alias dpu_clone 'git clone $REPOS/dpu.git'
 alias dirsize 'du -h -d 1'
 alias work 'cd /import/pwa'
