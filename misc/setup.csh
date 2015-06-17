@@ -1,8 +1,9 @@
 # Source this file for simulation setup
 setenv TOOLS /local/rapid-tools
-setenv PATH $TOOLS/scripts:$PATH
 set tools = $TOOLS
-source /local/sync_setup.csh
+if (! $?IMPORT_MOUNTED) then
+  source /local/sync_setup.csh
+endif
 setenv VCS_HOME_PREFIX /tools/synopsys
 setenv VCS_HOME /tools/synopsys/vcs/J-2014.12-1
 setenv UVM_HOME $VCS_HOME/etc/uvm

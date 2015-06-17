@@ -3,7 +3,10 @@
 import sys, time, string, re, os, argparse, subprocess, shlex, fileinput
 
 op = argparse.ArgumentParser(description="""
-Description of script goes here
+Syncs files from remote host to local host
+Syncs from /local/sync.list or from command line.
+sync line format: file/directory [rsync-options]
+Put full line in quotes on command line
 """)
 
 op.add_argument('-X',                 help='Show commands, but do not execute',action='store_true')

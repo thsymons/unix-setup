@@ -1,9 +1,11 @@
 #!/bin/env python
-# Remaps path(s) from export to final path
+# Remaps path(s) from /import to /local path
 import sys, time, string, re, os, argparse, subprocess, shlex
 
 op = argparse.ArgumentParser(description="""
-Description of script goes here
+Remaps path(s) from /import to /local path
+Useful to remap LM_LICENSE_FILE to local drive
+syntax: setenv env-var `remap_path env-var`
 """)
 
 op.add_argument('-X',                 help='Show commands, but do not execute',action='store_true')
@@ -26,7 +28,7 @@ file = opts.cmdline[0]
 def chase(link):
   file = link
   while True:
-    file = re.sub(r'/import/', '/export/', file)
+    file = re.sub(r'/import', '/local', file)
     if os.path.islink(file):
       path = os.readlink(file)
       if path[0] != '/':
