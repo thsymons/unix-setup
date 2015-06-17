@@ -25,7 +25,11 @@ def run_cmd(cmd,quiet=True,read=None,always=False):
 tool = opts.cmdline[0]
 lines = run_cmd('which %s' % tool, read=True)
 if len(lines) > 0:
-  version = os.path.basename(lines[0])
+  dlist = lines[0].split('/')
+  dlist.pop()
+  if dlist[-1] == 'bin':
+    dlist.pop()
+  version = dlist.pop()
   print version,
 else:
   sys.exit(1)

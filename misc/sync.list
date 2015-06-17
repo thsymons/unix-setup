@@ -1,0 +1,11 @@
+/import/rapid-tools/scripts
+$RAPID_IP
+$CAVA_ROOT
+$SDK_NEWLIBDIR
+$ISGPATH
+$COMPILED_MEMS
+$CUSTOM_PHY_LIB
+$VLSI_PHYSOC_LIB
+$DW_SIM_LIB
+/import/rapid/env/synopsys_bc.setup
+/import/rapid/env/rapid.csh

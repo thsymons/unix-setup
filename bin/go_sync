@@ -22,10 +22,22 @@ def run_cmd(cmd,quiet=False,read=None,always=False):
   return 0
 
 host = 'gato'
-sync_file = '/import/sync.list'
+sync_file = '/local/sync.list'
+
+def sync(src):
+  global host
+  for target in src.split(':'):# for lists like LM_LICENSE_FILE
+    head = os.path.dirname(target)
+    head = re.sub(r'^/import', '/local', head)
+    run_cmd('mkdir -p %s' % head)
+    cmd = 'rsync -avz -e ssh %s:%s %s' % (host, target, head)
+    run_cmd(cmd)
 
 # target can be file or directory
-if os.path.exists(sync_file):
+if len(opts.cmdline) > 0:
+  sync(opts.cmdline[0])
+
+elif os.path.exists(sync_file):
   for line in fileinput.input(sync_file):
     line = line.rstrip()
     if re.match(r'^\s*$', line): # skip blank lines
@@ -33,10 +45,6 @@ if os.path.exists(sync_file):
     if re.match(r'^\s*#', line): # skip comment lines
       continue
     src = string.Template(line).substitute(os.environ)
-    for target in src.split(':'):# for lists like LM_LICENSE_FILE
-      head = os.path.dirname(target)
-      run_cmd('mkdir -p %s' % head, quiet=True)
-      cmd = 'rsync -avz -e ssh %s:%s %s' % (host, target, head)
-      run_cmd(cmd)
-	
+    sync(src)
+
 
