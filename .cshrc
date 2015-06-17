@@ -1,9 +1,4 @@
-
 setenv PATH ~/bin:$PATH
-setenv TOOLS /local/rapid-tools
-setenv PATH $TOOLS/scripts:$PATH
-setenv VCS_HOME_PREFIX /tools/synopsys
-setenv REPOS ssh://gato.us.oracle.com/import/rapid/repos
 alias h history
 alias go_mount 'sshfs gato:/import /import'
 alias dpu_clone 'git clone $REPOS/dpu.git'

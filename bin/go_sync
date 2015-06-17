@@ -24,13 +24,16 @@ def run_cmd(cmd,quiet=False,read=None,always=False):
 host = 'gato'
 sync_file = '/local/sync.list'
 
-def sync(src):
+def sync(line):
   global host
-  for target in src.split(':'):# for lists like LM_LICENSE_FILE
+  ls = line.split();
+  spec = ls.pop(0)
+  rsync_opts = ' '.join(ls)
+  for target in spec.split(':'):# for lists like LM_LICENSE_FILE
     head = os.path.dirname(target)
     head = re.sub(r'^/import', '/local', head)
-    run_cmd('mkdir -p %s' % head)
-    cmd = 'rsync -avz -e ssh %s:%s %s' % (host, target, head)
+    run_cmd('mkdir -p %s' % head, quiet=True)
+    cmd = 'rsync -avz %s -e ssh %s:%s %s' % (rsync_opts, host, target, head)
     run_cmd(cmd)
 
 # target can be file or directory

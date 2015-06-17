@@ -1,3 +1,8 @@
+# Input file for go_sync script
+# Defines files/directories to be copied from remote to local machine
+# format: file/directory [rsync-options]
+# env vars will be interpolated
+#
 /import/rapid-tools/scripts
 $RAPID_IP
 $CAVA_ROOT
@@ -9,3 +14,4 @@ $VLSI_PHYSOC_LIB
 $DW_SIM_LIB
 /import/rapid/env/synopsys_bc.setup
 /import/rapid/env/rapid.csh
+$LM_LICENSE_FILE --copy-links
